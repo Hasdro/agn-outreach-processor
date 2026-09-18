@@ -24,6 +24,25 @@ is("csv: quoted comma",   E.parseCSV('a,b\n"x, y",2')[1], ["x, y","2"]);
 is("csv: escaped quote",  E.parseCSV('a\n"he said ""hi"""')[1], ['he said "hi"']);
 is("csv: bom stripped",   E.parseCSV('﻿Name\nx')[0], ["Name"]);
 
+/* --- delimiters --------------------------------------------------------- */
+is("csv: semicolon detected",  E.parseCSV("a;b\n1;2")[1], ["1","2"]);
+is("csv: tab detected",        E.parseCSV("a\tb\n1\t2")[1], ["1","2"]);
+is("csv: comma still default", E.parseCSV("a,b\n1,2")[1], ["1","2"]);
+is("csv: quoted delimiter kept", E.parseCSV('a;b\n"x; y";2')[1], ["x; y","2"]);
+
+/* --- placeholder names -------------------------------------------------- */
+{
+  const rows=[["---","p1@x.ae","0501235001"],["N/A","p2@x.ae","0501235002"],
+              ["Khan","p3@x.ae","0501235003"]];
+  const cls=E.classify(rows,1,2);
+  const ctx={headers:["Name","Email","Mobile"],dataRows:rows,mandatory:["Last_Name"],
+    mappings:[{field:"Last_Name",type:"computed",key:"last_derived"}]};
+  is("name: punctuation falls back to email local part",
+     E.buildRecord(cls[0],ctx).Last_Name, "p1");
+  is("name: N/A falls back too", E.buildRecord(cls[1],ctx).Last_Name, "p2");
+  is("name: a real surname is kept", E.buildRecord(cls[2],ctx).Last_Name, "Khan");
+}
+
 /* --- dedupe ----------------------------------------------------------- */
 {
   const rows=[["A","same@x.ae","0501234901"],["B","SAME@X.AE","0501234902"]];

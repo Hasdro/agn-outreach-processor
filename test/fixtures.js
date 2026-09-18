@@ -101,3 +101,44 @@ Junk,n/a,0000000000`,
   note:"must split into 2 calls and import all 101" }
 
 ];
+
+/* --- added after the first live import round ------------------------------ */
+module.exports.push(
+
+{ name:"semicolon-delimited export (common from Excel in EU locales)",
+  csv:`Name;Email;Mobile\nSemi One;semi1.${RUN}@x.ae;0501234991\nSemi Two;semi2.${RUN}@x.ae;0551234991`,
+  expect:{ rows:2, both:2, importable:2 },
+  note:"Excel uses ; wherever the comma is the decimal separator — must be detected" },
+
+{ name:"columns in an unexpected order with odd headers",
+  csv:`Mobile Number,Company Name,E-Mail Address,Contact Name
+0501234992,Zeta LLC,order.${RUN}@x.ae,Hana Saleh
++971551234993,Eta LLC,order2.${RUN}@x.ae,Bilal Omar`,
+  expect:{ rows:2, both:2, importable:2 },
+  note:"header detection must not depend on column position" },
+
+{ name:"trailing empty rows and ragged columns",
+  csv:`Name,Email,Mobile\nRagged One,rag.${RUN}@x.ae,0501234994\nShortRow,rag2.${RUN}@x.ae\n,,\n`,
+  expect:{ rows:2, importable:2 },
+  note:"a row with fewer cells must not throw, blank rows must be dropped" },
+
+{ name:"same person twice with different casing and spacing",
+  csv:`Name,Email,Mobile
+Nadia Fahed,  Nadia.${RUN}@X.AE ,050 123 4995
+nadia fahed,nadia.${RUN}@x.ae,0501234995`,
+  expect:{ rows:2, both:1, neither:1, importable:1 },
+  note:"both email and phone duplicate, so the second row has no channel left" },
+
+{ name:"names that are only whitespace or punctuation",
+  csv:`Name,Email,Mobile\n   ,ws1.${RUN}@x.ae,0501234996\n---,ws2.${RUN}@x.ae,0501234997`,
+  expect:{ rows:2, both:2, importable:2 },
+  note:"Last_Name is mandatory; a blank name must fall back, not fail the row" },
+
+{ name:"very wide file with many unmapped columns",
+  csv:(()=>{ const h=["Name","Email","Mobile"].concat(Array.from({length:40},(_,i)=>`Extra${i}`));
+             const r=["Wide Person",`wide.${RUN}@x.ae`,"0501234998"].concat(Array.from({length:40},(_,i)=>`v${i}`));
+             return h.join(",")+"\n"+r.join(","); })(),
+  expect:{ rows:1, both:1, importable:1 },
+  note:"unmapped columns must simply be ignored" }
+
+);

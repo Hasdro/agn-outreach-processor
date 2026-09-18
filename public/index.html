@@ -144,6 +144,10 @@
   .pf b{font-variant-numeric:tabular-nums}
   .pf .sub{color:var(--muted);font-size:12.5px;margin-top:5px}
   .pf.warn{border-color:var(--amber,#b7791f)}
+
+  .flowrow{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .flowrow label{margin:0;white-space:nowrap}
+  .flowrow select{max-width:340px;flex:1}
   .hide{display:none!important}
 </style>
 </head>
@@ -182,17 +186,11 @@
   </div>
 
   <div class="card">
-    <div class="step">2 — Select industry &amp; email flow</div>
-    <div class="grid2">
-      <div><label class="fl">Industry</label>
-        <select id="industry"><option value="">Choose industry…</option></select></div>
-      <div><label class="fl">Map to email flow</label>
-        <select id="flow" disabled><option>Select industry first</option></select></div>
+    <div class="step">2 — Channel routing</div>
+    <div class="flowrow">
+      <label class="fl" for="flow">Email flow</label>
+      <select id="flow"></select>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="step">3 — Channel routing</div>
     <div class="tiles">
       <div class="tile t-email">
         <div class="hd">
@@ -241,13 +239,13 @@
   </div>
 
   <div class="card" id="mapCard">
-    <div class="step">4 — Map to Zoho CRM</div>
+    <div class="step">3 — Map to Zoho CRM</div>
 
     <div class="grid2">
       <div><label class="fl">Create as</label>
         <select id="dest"><option value="">Loading modules…</option></select></div>
       <div><label class="fl">Tag <span class="hint">— created if new, applied to every record</span></label>
-        <input id="tag" type="text" placeholder="e.g. outreach-2026-09" maxlength="25"></div>
+        <input id="tag" type="text" placeholder="none — records will not be grouped" maxlength="25"></div>
     </div>
 
     <div id="mapBox" class="hide">
@@ -264,7 +262,7 @@
   </div>
 
   <div class="card">
-    <div class="step">5 — Import</div>
+    <div class="step">4 — Import</div>
     <div class="grid2">
       <div><label class="fl">Match existing records on</label>
         <select id="matchOn">
@@ -333,14 +331,8 @@ let headers=[], dataRows=[], results=[], counts=null, fileName="";
 const $ = id => document.getElementById(id);
 
 /* section 2 */
-Object.keys(Engine.INDUSTRY_FLOWS).forEach(k=>
-  $("industry").insertAdjacentHTML("beforeend",`<option>${k}</option>`));
-$("industry").addEventListener("change", e=>{
-  const flows=Engine.INDUSTRY_FLOWS[e.target.value], sel=$("flow");
-  if(!flows){ sel.disabled=true; sel.innerHTML="<option>Select industry first</option>"; return; }
-  sel.disabled=false;
-  sel.innerHTML=flows.map(f=>`<option>${f}</option>`).join("");
-});
+$("flow").innerHTML = `<option value="">Choose a flow…</option>`+
+  Engine.INDUSTRIES.map(i=>`<option>${i}</option>`).join("");
 
 /* section 1 */
 const drop=$("drop");
@@ -606,9 +598,9 @@ function renderSlices(){
 }
 
 function downloadSlice(key, rows){
-  const ind=$("industry").value, flow=$("flow").disabled?"":$("flow").value;
+  const flow=$("flow").value;
   const out=[[...headers, "Channel","Email (clean)","Mobile (clean)","Role account",
-              "Suggested email","Issue","Industry","Email flow"]];
+              "Suggested email","Issue","Email flow"]];
   rows.forEach(r=>{
     const orig=dataRows[r.row-2]||[];
     out.push([
@@ -619,7 +611,7 @@ function downloadSlice(key, rows){
       r.email.role ? "yes" : "",
       r.email.suggestion || "",
       whySkipped(r),
-      ind, flow
+      flow
     ]);
   });
   download(`outreach-${key}.csv`, out);
@@ -973,10 +965,15 @@ async function startImport(){
   try{
     logLine(`Importing ${rows.length.toLocaleString()} contacts into ${dest}`, "hd");
 
+    /* An empty tag used to do nothing and say nothing, so an import that was
+       meant to be traceable finished looking entirely successful and left no
+       way to find its records afterwards. Silence is the bug; say so. */
     if(tag){
       const t = await api("/api/tags", { module: dest, names: [tag] });
       if(t.created?.length) logLine(`Tag "${tag}" created on ${dest}`, "ok");
       else                  logLine(`Tag "${tag}" already existed — reusing it`);
+    }else{
+      logLine(`No tag set — these records will not be grouped or findable later.`, "err");
     }
 
     /* establish what already exists before writing anything */

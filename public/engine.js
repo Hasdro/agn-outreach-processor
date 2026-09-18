@@ -8,16 +8,18 @@
 const MAX_ROWS = 10000;
 
 /* --- section 2 config: industry -> the email flows it may map to ---------- */
-const INDUSTRY_FLOWS = {
-  "Real Estate":        ["Off-plan launch", "Investor nurture", "Cold outreach"],
-  "Retail & E-commerce":["Store launch", "Seasonal promo", "Cold outreach"],
-  "Healthcare":         ["Clinic onboarding", "Patient re-activation"],
-  "Education":          ["Course enrolment", "Webinar invite"],
-  "Hospitality":        ["Venue promo", "Corporate rates"],
-  "Professional Services":["Consultation offer", "Cold outreach"],
-  "Construction":       ["Project enquiry", "Supplier intro"],
-  "Other":              ["Generic nurture", "Cold outreach"]
-};
+/* Options for the email-flow picker. One flow per industry: the flow a contact
+   enters is decided by the industry being targeted, so the two are the same
+   choice and there is no point asking twice. The CRM's own Industry field, if
+   the org has one, is filled through the mapping table like any other field. */
+const INDUSTRIES = [
+  "Real Estate", "Construction", "Retail & E-commerce", "Healthcare",
+  "Education", "Hospitality & F&B", "Travel & Tourism", "Professional Services",
+  "Financial Services", "Manufacturing", "Logistics & Transport",
+  "Technology & IT", "Automotive", "Media & Marketing", "Energy & Utilities",
+  "Government & Public Sector", "Non-profit", "Other"
+];
+
 
 /* --- email reference data ------------------------------------------------ */
 const PLACEHOLDERS = new Set(["noemail","no-email","none","n/a","na","null","test","abc","xxx",
@@ -140,16 +142,37 @@ function validatePhone(raw){
 /* ========================= file reading ================================== */
 
 /* A CSV parser that handles quoted fields, so we work with no network too. */
-function parseCSV(text){
+/* Excel writes semicolons instead of commas in any locale where the comma is
+   the decimal separator, and tab-separated exports are common too. Guessing
+   from the header line costs nothing and turns an unreadable file into a
+   readable one — without it such a file parses as a single column and the page
+   reports, truthfully but uselessly, that there is nothing to import. */
+function detectDelimiter(text){
+  const line = text.replace(/^﻿/,"").split(/\r?\n/)[0] || "";
+  let best = ",", bestCount = 0;
+  for(const d of [",",";","\t","|"]){
+    let count = 0, q = false;
+    for(let i=0;i<line.length;i++){
+      const c = line[i];
+      if(c === '"') q = !q;
+      else if(c === d && !q) count++;
+    }
+    if(count > bestCount){ bestCount = count; best = d; }
+  }
+  return best;
+}
+
+function parseCSV(text, delim){
   const rows=[]; let row=[], cell="", q=false;
   text = text.replace(/^﻿/,"");
+  const d = delim || detectDelimiter(text);
   for(let i=0;i<text.length;i++){
     const c=text[i];
     if(q){
       if(c==='"'){ if(text[i+1]==='"'){cell+='"';i++;} else q=false; }
       else cell+=c;
     } else if(c==='"'){ q=true; }
-    else if(c===","){ row.push(cell); cell=""; }
+    else if(c===d){ row.push(cell); cell=""; }
     else if(c==="\n"){ row.push(cell); rows.push(row); row=[]; cell=""; }
     else if(c!=="\r"){ cell+=c; }
   }
@@ -186,6 +209,15 @@ function splitName(r, ctx){
     const full = cell(/^(full[\s_-]*)?name$|^contact[\s_-]*name/i);
     if(full){ const b = full.split(/\s+/); last = b.pop(); first = first || b.join(" "); }
   }
+  /* "---", "." and "N/A" are placeholders, not surnames, and Last_Name is
+     mandatory — so they would be written into the CRM verbatim. Anything with
+     no letter or digit in it is treated as absent. */
+  const NAME_PLACEHOLDERS = new Set(["n/a","na","n.a.","none","null","nil","unknown","tbd",
+    "test","testing","noname","no name","x","xx","xxx","-","--","?","??","."]);
+  const meaningful = v => /[\p{L}\p{N}]/u.test(v||"") &&
+                          !NAME_PLACEHOLDERS.has(String(v).trim().toLowerCase());
+  if(!meaningful(last)) last = "";
+  if(!meaningful(first)) first = "";
   if(!last) last = r.email.ok ? r.email.value.split("@")[0] : "Unknown";
   return { first, last };
 }
@@ -288,11 +320,11 @@ async function sendInHalves(rows, send, onRow, onReject){
   }
 }
 
-const Engine = { MAX_ROWS, sendInHalves, INDUSTRY_FLOWS, validateEmail, validatePhone, parseCSV,
+const Engine = { MAX_ROWS, sendInHalves, detectDelimiter, INDUSTRIES, validateEmail, validatePhone, parseCSV,
                  editDistance, COMPUTED, splitName, classify, buildRecord };
 
 if(typeof window !== "undefined") window.Engine = Engine;
 if(typeof module !== "undefined" && module.exports){
-  module.exports = { MAX_ROWS, sendInHalves, INDUSTRY_FLOWS, validateEmail, validatePhone, parseCSV,
+  module.exports = { MAX_ROWS, sendInHalves, detectDelimiter, INDUSTRIES, validateEmail, validatePhone, parseCSV,
                      editDistance, COMPUTED, splitName, classify, buildRecord };
 }
