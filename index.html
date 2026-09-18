@@ -96,9 +96,17 @@
      font-weight:600}
   td.why{color:var(--muted)}
   .scroll{overflow-x:auto}
-  .fix{display:none;align-items:center;gap:10px;flex-wrap:wrap;background:var(--tint);
-       border:1px solid var(--edge);border-radius:11px;padding:12px 14px;margin-top:16px;
-       font-size:13.5px}
+  #slices{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+  #slices .lb{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+              color:var(--muted);margin-bottom:11px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
+        background:var(--card);color:var(--ink);border-radius:99px;padding:6px 13px;
+        font-size:13.5px;cursor:pointer;transition:.12s}
+  .chip:hover{border-color:var(--blue);color:var(--blue)}
+  .chip .n{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12.5px}
+  .chip:hover .n{color:var(--blue)}
+  .chip svg{opacity:.5} .chip:hover svg{opacity:1}
   .hide{display:none!important}
 </style>
 </head>
@@ -185,7 +193,7 @@
     <p class="rule">Contacts with both details start both channels at once — WhatsApp follows up
        24h after any unopened email.</p>
 
-    <div class="fix" id="fix"></div>
+    <div id="slices"></div>
 
     <div id="review">
       <div class="scroll"><table id="tbl">
@@ -409,7 +417,7 @@ function resetAll(){
   headers=[];dataRows=[];results=[];counts=null;fileName="";
   drop.classList.remove("hide"); $("chip").style.display="none";
   $("mapping").classList.add("hide"); $("prog").style.display="none";
-  $("review").style.display="none"; $("fix").style.display="none";
+  $("review").style.display="none"; $("slices").style.display="none";
   $("foot").classList.add("hide"); $("file").value="";
   ["Email","Phone","Both"].forEach(k=>{
     $("n"+k).textContent="—"; $("d"+k).textContent=""; $("b"+k).style.width="0";
@@ -547,25 +555,10 @@ function finish(total){
       ? `<button class="link" id="toggleReview"><b>${skipped.toLocaleString()}</b> skipped</button><span>·</span>`
       : `<span><b>0</b> skipped</span><span>·</span>`)+
     `<span><b>${total.toLocaleString()}</b> rows in file</span>`+
-    `<span style="margin-left:auto"></span>`+
-    `<button id="dlRouted">Export</button>`;
+    `<span style="margin-left:auto"></span>`;
   if(skipped) $("toggleReview").addEventListener("click",toggleReview);
-  $("dlRouted").addEventListener("click",exportRouted);
 
-  /* the only nudge worth interrupting for: domains we can repair */
-  const typos=results.filter(r=>r.email.suggestion);
-  const fx=$("fix");
-  if(typos.length){
-    fx.style.display="flex";
-    fx.innerHTML=`<span><b>${typos.length}</b> email${typos.length>1?"s look":" looks"} mistyped `+
-      `— e.g. ${esc(typos[0].email.value)} → <b>${esc(typos[0].email.suggestion)}</b></span>`+
-      `<button class="primary" id="applyTypos" style="margin-left:auto">Fix all</button>`;
-    $("applyTypos").addEventListener("click",()=>{
-      typos.forEach(r=>{ dataRows[r.row-2][r.ei]=r.email.suggestion; });
-      run();
-    });
-  } else fx.style.display="none";
-
+  renderSlices();
   if($("review").style.display==="block") renderReview();
 }
 
@@ -606,7 +599,7 @@ function renderReview(){
   $("reviewFoot").innerHTML =
     (bad.length>100 ? `<span>Showing 100 of ${bad.length.toLocaleString()}</span>` : "")+
     `<span style="margin-left:auto"></span><button id="dlSkipped">Export skipped</button>`;
-  $("dlSkipped").addEventListener("click",exportSkipped);
+  $("dlSkipped").addEventListener("click",()=>downloadSlice("skipped",bad));
 }
 
 /* ========================= export ======================================== */
@@ -621,24 +614,63 @@ function download(name, rows){
   a.download=name; a.click(); URL.revokeObjectURL(a.href);
 }
 
-function exportRouted(){
-  const ind=$("industry").value, flow=$("flow").disabled?"":$("flow").value;
-  const out=[["Row","Channel","Email","Mobile","Role account","Industry","Email flow"]];
-  results.filter(r=>r.bucket!=="neither").forEach(r=>out.push([
-    r.row, r.bucket,
-    r.bucket==="phone" ? "" : r.email.value,
-    r.bucket==="email" ? "" : r.phone.value,
-    r.email.role?"yes":"", ind, flow
-  ]));
-  download("outreach-routed.csv", out);
+/* Every slice exports the SAME shape: the original row exactly as supplied,
+   plus the analysis columns appended. That way a slice can be corrected in
+   Excel and fed straight back in without reshaping it first. */
+const SLICES = [
+  {key:"ready",    label:"Ready to send",     test:r=>r.bucket!=="neither"},
+  {key:"email",    label:"Email only",        test:r=>r.bucket==="email"},
+  {key:"phone",    label:"Phone only",        test:r=>r.bucket==="phone"},
+  {key:"both",     label:"Both",              test:r=>r.bucket==="both"},
+  {key:"bad-email",label:"Invalid email",     test:r=>!r.email.ok && r.email.reason!=="EMPTY"},
+  {key:"bad-phone",label:"Invalid phone",     test:r=>!r.phone.ok && r.phone.reason!=="EMPTY"},
+  {key:"typo",     label:"Misspelt domain",   test:r=>!!r.email.suggestion},
+  {key:"landline", label:"Landline only",     test:r=>r.phone.ok && r.phone.kind==="landline"},
+  {key:"no-email", label:"No email",          test:r=>r.email.reason==="EMPTY"},
+  {key:"no-phone", label:"No phone",          test:r=>r.phone.reason==="EMPTY"},
+  {key:"neither",  label:"No email or phone", test:r=>r.email.reason==="EMPTY" && r.phone.reason==="EMPTY"},
+  {key:"duplicate",label:"Duplicates",        test:r=>r.dupEmail||r.dupPhone},
+  {key:"all",      label:"Everything",        test:()=>true}
+];
+
+const DL_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" '+
+  'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+
+  '<path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/></svg>';
+
+function renderSlices(){
+  const box=$("slices");
+  const present=SLICES.map(sl=>({...sl, rows:results.filter(sl.test)}))
+                      .filter(sl=>sl.rows.length);
+  if(!present.length){ box.style.display="none"; return; }
+  box.style.display="block";
+  box.innerHTML=`<div class="lb">Download</div><div class="chips">`+
+    present.map(sl=>`<button class="chip" data-k="${sl.key}">${DL_ICON}`+
+      `<span>${sl.label}</span><span class="n">${sl.rows.length.toLocaleString()}</span>`+
+      `</button>`).join("")+`</div>`;
+  box.querySelectorAll(".chip").forEach(b=>b.addEventListener("click",()=>{
+    const sl=present.find(x=>x.key===b.dataset.k);
+    downloadSlice(sl.key, sl.rows);
+  }));
 }
 
-function exportSkipped(){
-  const out=[["Row","Email as given","Phone as given","Why skipped"]];
-  results.filter(r=>r.bucket==="neither"||r.dupEmail||r.dupPhone).forEach(r=>out.push([
-    r.row, r.email.value, r.phone.value, whySkipped(r)
-  ]));
-  download("outreach-skipped.csv", out);
+function downloadSlice(key, rows){
+  const ind=$("industry").value, flow=$("flow").disabled?"":$("flow").value;
+  const out=[[...headers, "Channel","Email (clean)","Mobile (clean)","Role account",
+              "Suggested email","Issue","Industry","Email flow"]];
+  rows.forEach(r=>{
+    const orig=dataRows[r.row-2]||[];
+    out.push([
+      ...headers.map((_,i)=>orig[i]??""),
+      r.bucket==="neither" ? "" : r.bucket,
+      r.email.ok ? r.email.value : "",
+      (r.phone.ok && r.phone.kind==="mobile") ? r.phone.value : "",
+      r.email.role ? "yes" : "",
+      r.email.suggestion || "",
+      whySkipped(r),
+      ind, flow
+    ]);
+  });
+  download(`outreach-${key}.csv`, out);
 }
 </script>
 </body>
