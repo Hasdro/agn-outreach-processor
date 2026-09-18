@@ -3,6 +3,31 @@
 Upload a contact spreadsheet, validate it, see how the contacts route across email
 and WhatsApp, and import them into Zoho CRM.
 
+**Live:** https://agn-outreach-processor.vercel.app
+
+Validation works immediately. The CRM import stays disabled until the three Zoho
+environment variables are set — see below.
+
+## Connecting it to Zoho
+
+In the Vercel dashboard → the project → Settings → Environment Variables, add:
+
+| Variable | Where it comes from |
+|---|---|
+| `ZOHO_CLIENT_ID` | api-console.zoho.com → your Server-based Application |
+| `ZOHO_CLIENT_SECRET` | same application |
+| `ZOHO_REFRESH_TOKEN` | generated once via the OAuth consent flow |
+| `ZOHO_ACCOUNTS_HOST` | optional, defaults to `https://accounts.zoho.com` |
+| `ZOHO_API_HOST` | optional, defaults to `https://www.zohoapis.com` |
+
+Set them for Production, then redeploy so the functions pick them up. The accounts
+host and API host must be from the same regional data centre or Zoho rejects the
+token. Required scopes: `ZohoCRM.modules.ALL`, `ZohoCRM.settings.ALL`,
+`ZohoCRM.coql.READ`.
+
+Until they are set, `/api/fields` answers `{"configured": false}` and names the
+missing variables, and the page says so rather than failing obscurely.
+
 ## Running it
 
     npx vercel dev
