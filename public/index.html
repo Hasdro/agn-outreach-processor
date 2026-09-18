@@ -137,6 +137,12 @@
     .maphead{display:none}
     .maprow{grid-template-columns:1fr 1fr 34px}
   }
+
+  .pf{border:1px solid var(--edge);background:var(--tint);border-radius:11px;
+      padding:13px 15px;margin-top:18px;font-size:13.5px}
+  .pf b{font-variant-numeric:tabular-nums}
+  .pf .sub{color:var(--muted);font-size:12.5px;margin-top:5px}
+  .pf.warn{border-color:var(--amber,#b7791f)}
   .hide{display:none!important}
 </style>
 </head>
@@ -258,7 +264,25 @@
 
   <div class="card">
     <div class="step">5 — Import</div>
-    <div class="actions" style="margin-top:0">
+    <div class="grid2">
+      <div><label class="fl">Match existing records on</label>
+        <select id="matchOn">
+          <option value="Email">Email</option>
+          <option value="Mobile">Mobile</option>
+          <option value="">Don't check — create everything</option>
+        </select></div>
+      <div><label class="fl">If the record already exists</label>
+        <select id="dupePolicy">
+          <option value="skip">Skip it, leave the CRM record alone</option>
+          <option value="update">Update it with the new data</option>
+          <option value="create">Create a second record anyway</option>
+        </select></div>
+    </div>
+
+    <div id="preflight" class="pf hide"></div>
+
+    <div class="actions">
+      <button id="checkDupes">Check for existing records</button>
       <button class="primary" id="startImport">Import contacts</button>
       <button id="cancelImport" class="hide">Stop</button>
       <span class="hint" id="importHint"></span>
@@ -990,6 +1014,85 @@ async function apiGet(path){
 
 loadModules();
 
+/* ========================= existing-record handling ====================== */
+/* Zoho's duplicate reporting depends on which fields an admin marked unique,
+   and that is not something to rely on: in the org this was built against,
+   Leads has NO unique field, so importing the same person twice succeeds
+   silently and leaves two records. So existence is established up front with
+   our own lookup, and the user decides what should happen before anything is
+   written. */
+
+let preflight = null;   // { existing:{key->{id,account}}, matched:[rows], fresh:[rows] }
+
+$("checkDupes").addEventListener("click", ()=>runPreflight(true));
+$("matchOn").addEventListener("change", ()=>{ preflight=null; $("preflight").classList.add("hide"); });
+$("dupePolicy").addEventListener("change", ()=>{ if(preflight) paintPreflight(); });
+
+function matchValue(r, field){
+  if(field === "Email")  return r.email.ok ? r.email.value.toLowerCase() : "";
+  if(field === "Mobile") return (r.phone.ok && r.phone.kind==="mobile") ? r.phone.value : "";
+  return "";
+}
+
+async function runPreflight(announce){
+  const field = $("matchOn").value;
+  const rows  = results.filter(r => r.bucket !== "neither");
+  if(!field || !rows.length){ preflight = null; $("preflight").classList.add("hide"); return null; }
+
+  const dest = $("dest").value;
+  $("checkDupes").disabled = true;
+  $("checkDupes").textContent = "Checking…";
+  try{
+    const values = [...new Set(rows.map(r => matchValue(r, field)).filter(Boolean))];
+    const out = await api("/api/lookup", {
+      module: dest, field, values,
+      extra: dest === "Contacts" ? ["Last_Name","Account_Name"] : ["Last_Name","Company"]
+    });
+
+    const matched = [], fresh = [];
+    rows.forEach(r => {
+      const v = matchValue(r, field);
+      (v && out.existing[v]) ? matched.push(r) : fresh.push(r);
+    });
+    preflight = { field, existing: out.existing, matched, fresh, checked: out.checked };
+    paintPreflight();
+    return preflight;
+  }catch(err){
+    $("preflight").classList.remove("hide");
+    $("preflight").innerHTML = `Could not check for existing records: ${esc(err.message)}`;
+    preflight = null;
+    return null;
+  }finally{
+    $("checkDupes").disabled = false;
+    $("checkDupes").textContent = "Check for existing records";
+  }
+}
+
+function paintPreflight(){
+  if(!preflight) return;
+  const box = $("preflight");
+  box.classList.remove("hide");
+  const { matched, fresh, field } = preflight;
+  const policy = $("dupePolicy").value;
+
+  if(!matched.length){
+    box.classList.remove("warn");
+    box.innerHTML = `<b>${fresh.length.toLocaleString()}</b> contacts, none of them already in `+
+      `${$("dest").value}. Nothing will be overwritten.`;
+    return;
+  }
+  box.classList.add("warn");
+  const verb = policy === "update" ? `<b>updated</b> with the file's data`
+             : policy === "create" ? `<b>duplicated</b> — a second record created for each`
+             : `<b>left untouched</b>`;
+  box.innerHTML =
+    `<b>${matched.length.toLocaleString()}</b> of ${(matched.length+fresh.length).toLocaleString()} `+
+    `already exist in ${$("dest").value}, matched on ${field}. `+
+    `They will be ${verb}.`+
+    `<div class="sub"><b>${fresh.length.toLocaleString()}</b> new record`+
+    `${fresh.length===1?"":"s"} will be created.</div>`;
+}
+
 /* ========================= CRM import ==================================== */
 /* The browser holds the data and drives the loop; every CRM call goes through
    our own /api/* routes, which are the only place the Zoho credentials exist.
@@ -998,7 +1101,7 @@ loadModules();
 
 const BATCH = 100;
 let importing = false, cancelled = false;
-let imported = [], failedRows = [];
+let imported = [], failedRows = [], skippedRows = [];
 
 function logLine(text, cls){
   const box = $("impLog"); box.classList.remove("hide");
@@ -1020,7 +1123,7 @@ async function startImport(){
   const dest = $("dest").value;
   const tag  = $("tag").value.trim();
 
-  importing = true; cancelled = false; imported = []; failedRows = [];
+  importing = true; cancelled = false; imported = []; failedRows = []; skippedRows = [];
   $("startImport").disabled = true;
   $("cancelImport").classList.remove("hide");
   $("importHint").textContent = "";
@@ -1037,49 +1140,94 @@ async function startImport(){
       else                  logLine(`Tag "${tag}" already existed — reusing it`);
     }
 
-    const records = rows.map(buildRecord);
-
-    for(let i=0; i<records.length; i+=BATCH){
-      if(cancelled){ logLine("Stopped by user.", "err"); break; }
-
-      const slice = records.slice(i, i+BATCH);
-      const rowSlice = rows.slice(i, i+BATCH);
-      const n = Math.floor(i/BATCH)+1, of = Math.ceil(records.length/BATCH);
-
-      try{
-        const out = await api("/api/import", {
-          module: dest, records: slice, tag: tag || undefined,
-          mode: "insert",
-          accountLinking: dest === "Contacts" ? "create" : "none"
-        });
-
-        (out.notes||[]).forEach(nt => {
-          if(nt.type === "account_created") logLine(`  Account created: ${nt.name}`, "ok");
-          if(nt.type === "account_failed")  logLine(`  Account failed: ${nt.name} — ${nt.message}`, "err");
-        });
-
-        out.results.forEach((res, j) => {
-          const row = rowSlice[j];
-          if(res.ok) imported.push({ row, id: res.id, action: res.action });
-          else       failedRows.push({ row, reason: res.message, code: res.code });
-        });
-
-        logLine(`Batch ${n}/${of}: ${out.counts.inserted} added`+
-                (out.counts.updated?`, ${out.counts.updated} updated`:"")+
-                (out.counts.failed?`, ${out.counts.failed} failed`:""),
-                out.counts.failed ? "err" : "ok");
-      }catch(err){
-        /* a whole batch failed — record every row in it rather than losing them */
-        rowSlice.forEach(row => failedRows.push({ row, reason: err.message, code:"BATCH_FAILED" }));
-        logLine(`Batch ${n}/${of} failed: ${err.message}`, "err");
-      }
-
-      paintImport(i + slice.length, records.length);
+    /* establish what already exists before writing anything */
+    const field  = $("matchOn").value;
+    const policy = $("dupePolicy").value;
+    let plan = { matched: [], fresh: rows };
+    if(field){
+      const pf = preflight || await runPreflight(false);
+      if(pf) plan = pf;
+      logLine(`${plan.matched.length.toLocaleString()} already in CRM, `+
+              `${plan.fresh.length.toLocaleString()} new (matched on ${field})`);
     }
 
-    paintImport(imported.length + failedRows.length, records.length);
-    logLine(`Done — ${imported.length.toLocaleString()} in CRM, `+
-            `${failedRows.length.toLocaleString()} not imported.`, "hd");
+    /* three groups, because they need three different calls */
+    const groups = [];
+    if(plan.fresh.length) groups.push({ rows: plan.fresh, mode:"insert", what:"new" });
+    if(plan.matched.length){
+      if(policy === "update")      groups.push({ rows: plan.matched, mode:"upsert", what:"existing" });
+      else if(policy === "create") groups.push({ rows: plan.matched, mode:"insert", what:"duplicate" });
+      else {
+        plan.matched.forEach(row => skippedRows.push({ row, reason:"Already in CRM — skipped by choice" }));
+        logLine(`${plan.matched.length.toLocaleString()} existing records skipped by choice`);
+      }
+    }
+
+    const totalToSend = groups.reduce((n,g)=>n+g.rows.length, 0);
+    let sent = 0;
+
+    for(const g of groups){
+      for(let i=0; i<g.rows.length; i+=BATCH){
+        if(cancelled){ logLine("Stopped by user.", "err"); break; }
+
+        const rowSlice = g.rows.slice(i, i+BATCH);
+        const slice    = rowSlice.map(buildRecord);
+        const n = Math.floor(i/BATCH)+1, of = Math.ceil(g.rows.length/BATCH);
+
+        /* the account each existing contact sits on today, so the server can
+           report when an update moves one to a different company */
+        const currentAccounts = {};
+        if(dest === "Contacts" && g.mode === "upsert"){
+          rowSlice.forEach((r,j) => {
+            const hit = plan.existing[matchValue(r, field)];
+            if(hit?.account) currentAccounts[j] = hit.account;
+          });
+        }
+
+        try{
+          const out = await api("/api/import", {
+            module: dest, records: slice, tag: tag || undefined,
+            mode: g.mode,
+            duplicateCheck: g.mode === "upsert" && field ? [field] : [],
+            accountLinking: dest === "Contacts" ? "create" : "none",
+            currentAccounts
+          });
+
+          (out.notes||[]).forEach(nt => {
+            if(nt.type === "account_created") logLine(`  Account created: ${nt.name}`, "ok");
+            if(nt.type === "account_failed")  logLine(`  Account failed: ${nt.name} — ${nt.message}`, "err");
+            if(nt.type === "account_changed") logLine(`  Company changed: ${nt.from} → ${nt.to}`, "ok");
+          });
+
+          out.results.forEach((res, j) => {
+            const row = rowSlice[j];
+            if(res.ok) imported.push({ row, id: res.id, action: res.action });
+            else       failedRows.push({ row, reason: res.message, code: res.code });
+          });
+
+          logLine(`${g.what} batch ${n}/${of}: ${out.counts.inserted} added`+
+                  (out.counts.updated?`, ${out.counts.updated} updated`:"")+
+                  (out.counts.failed?`, ${out.counts.failed} failed`:""),
+                  out.counts.failed ? "err" : "ok");
+        }catch(err){
+          rowSlice.forEach(row => failedRows.push({ row, reason: err.message, code:"BATCH_FAILED" }));
+          logLine(`${g.what} batch ${n}/${of} failed: ${err.message}`, "err");
+        }
+
+        sent += rowSlice.length;
+        paintImport(sent, totalToSend);
+      }
+      if(cancelled) break;
+    }
+
+    paintImport(imported.length + failedRows.length + skippedRows.length,
+                imported.length + failedRows.length + skippedRows.length);
+    const added   = imported.filter(x => x.action !== "update").length;
+    const updated = imported.filter(x => x.action === "update").length;
+    logLine(`Done — ${added.toLocaleString()} created`+
+            (updated?`, ${updated.toLocaleString()} updated`:"")+
+            (skippedRows.length?`, ${skippedRows.length.toLocaleString()} skipped`:"")+
+            (failedRows.length?`, ${failedRows.length.toLocaleString()} failed`:"")+".", "hd");
     renderImportSlices();
   }catch(err){
     logLine(`Import aborted: ${err.message}`, "err");
@@ -1098,20 +1246,23 @@ function paintImport(done, total){
   $("impStats").innerHTML =
     `<span><b>${imported.length.toLocaleString()}</b> imported</span><span>·</span>`+
     `<span><b>${failedRows.length.toLocaleString()}</b> failed</span><span>·</span>`+
-    `<span><b>${remaining.toLocaleString()}</b> remaining</span><span>·</span>`+
-    `<span><b>${total.toLocaleString()}</b> total</span>`;
+    (skippedRows.length?`<span><b>${skippedRows.length.toLocaleString()}</b> skipped</span><span>·</span>`:"")+
+    `<span><b>${Math.max(0,remaining).toLocaleString()}</b> remaining</span><span>·</span>`+
+    `<span><b>${total.toLocaleString()}</b> to send</span>`;
 }
 
 /* the two slices that matter after an import: what landed, and what did not */
 function renderImportSlices(){
   const box = $("impSlices");
   const sets = [
-    { key:"imported", label:"Imported",     rows: imported.map(x=>x.row) },
-    { key:"failed",   label:"Not imported", rows: failedRows.map(x=>x.row) }
+    { key:"created", label:"Created", rows: imported.filter(x=>x.action!=="update").map(x=>x.row) },
+    { key:"updated", label:"Updated", rows: imported.filter(x=>x.action==="update").map(x=>x.row) },
+    { key:"skipped", label:"Skipped (already in CRM)", rows: skippedRows.map(x=>x.row) },
+    { key:"failed",  label:"Not imported", rows: failedRows.map(x=>x.row) }
   ].filter(s => s.rows.length);
   if(!sets.length){ box.innerHTML=""; return; }
 
-  const reasonByRow = new Map(failedRows.map(f => [f.row.row, f.reason]));
+  const reasonByRow = new Map([...failedRows, ...skippedRows].map(f => [f.row.row, f.reason]));
   const idByRow     = new Map(imported.map(x => [x.row.row, x.id]));
 
   box.innerHTML = `<div class="lb" style="margin-top:16px">Download</div><div class="chips">`+
@@ -1119,6 +1270,18 @@ function renderImportSlices(){
       `<span>${s.label}</span><span class="n">${s.rows.length.toLocaleString()}</span></button>`).join("")+
     `</div>`;
   box.querySelector(".lb").className = "lb";
+  /* Zoho can still reject a row as duplicate even after the pre-flight — a
+     unique field we did not match on, or a record created between the check
+     and the write. Those are offered as a retry rather than left as failures. */
+  const dupFails = failedRows.filter(f => f.code === "DUPLICATE_DATA");
+  if(dupFails.length && $("dupePolicy").value !== "update"){
+    box.insertAdjacentHTML("beforeend",
+      `<div class="pf warn" style="margin-top:14px"><b>${dupFails.length}</b> `+
+      `row${dupFails.length===1?" was":"s were"} rejected as already existing. `+
+      `<button id="retryDupes" style="margin-left:8px">Update them instead</button></div>`);
+    $("retryDupes").addEventListener("click", retryAsUpdates);
+  }
+
   box.querySelectorAll(".chip").forEach(b => b.addEventListener("click", ()=>{
     const s = sets.find(x => x.key === b.dataset.k);
     const out = [[...headers, "CRM record id", "Import result"]];
@@ -1130,6 +1293,39 @@ function renderImportSlices(){
     });
     download(`crm-${s.key}.csv`, out);
   }));
+}
+
+/* Re-send the rows Zoho rejected as duplicates, this time as updates. */
+async function retryAsUpdates(){
+  const field = $("matchOn").value || "Email";
+  const rows  = failedRows.filter(f => f.code === "DUPLICATE_DATA").map(f => f.row);
+  if(!rows.length) return;
+
+  $("dupePolicy").value = "update";
+  failedRows = failedRows.filter(f => f.code !== "DUPLICATE_DATA");
+  logLine(`Retrying ${rows.length} rejected row${rows.length===1?"":"s"} as updates…`, "hd");
+
+  const dest = $("dest").value, tag = $("tag").value.trim();
+  for(let i=0; i<rows.length; i+=BATCH){
+    const rowSlice = rows.slice(i, i+BATCH);
+    try{
+      const out = await api("/api/import", {
+        module: dest, records: rowSlice.map(buildRecord), tag: tag || undefined,
+        mode:"upsert", duplicateCheck:[field],
+        accountLinking: dest === "Contacts" ? "create" : "none"
+      });
+      out.results.forEach((res,j) => {
+        if(res.ok) imported.push({ row: rowSlice[j], id: res.id, action: res.action });
+        else       failedRows.push({ row: rowSlice[j], reason: res.message, code: res.code });
+      });
+      logLine(`  ${out.counts.updated} updated, ${out.counts.failed} still failing`,
+              out.counts.failed ? "err" : "ok");
+    }catch(err){
+      rowSlice.forEach(row => failedRows.push({ row, reason: err.message, code:"BATCH_FAILED" }));
+      logLine(`  retry failed: ${err.message}`, "err");
+    }
+  }
+  renderImportSlices();
 }
 
 async function api(path, body){

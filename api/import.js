@@ -23,7 +23,8 @@ export default handler(async (req) => {
     tag,                  // optional tag name, created beforehand via /api/tags
     mode = "insert",      // "insert" | "upsert"
     duplicateCheck = [],  // fields to match on when upserting
-    accountLinking = "none" // "none" | "create" — Contacts only
+    accountLinking = "none", // "none" | "create" — Contacts only
+    currentAccounts = {}     // rowIndex -> {id,name} the contact is linked to today
   } = readBody(req);
 
   if(!module) throw new HttpError(400, "module is required.");
@@ -73,9 +74,19 @@ export default handler(async (req) => {
         }
       }
 
-      data = data.map(r => {
+      data = data.map((r, idx) => {
         const n = String(r.Account_Name||"").trim();
         const id = n ? idByName.get(n.toLowerCase()) : null;
+
+        /* An existing contact whose file row carries a different company is
+           re-pointed at the new Account rather than left on the old one. The
+           Account itself was created above if it did not exist — that is the
+           whole reason this resolution runs before the write. */
+        const was = currentAccounts[idx];
+        if(id && was && was.id && was.id !== id)
+          notes.push({ type:"account_changed", row: idx,
+                       from: was.name || was.id, to: n });
+
         return id ? { ...r, Account_Name: { id } }
                   : (n ? { ...r, Account_Name: undefined } : r);
       });
