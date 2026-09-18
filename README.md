@@ -1,9 +1,28 @@
 # AGN Outreach Processor
 
-Upload a contact spreadsheet, validate it, and see how the contacts route across
-email and WhatsApp.
+Upload a contact spreadsheet, validate it, see how the contacts route across email
+and WhatsApp, and import them into Zoho CRM.
 
-Open `index.html` in a browser. There is no build step and no server.
+## Running it
+
+    npx vercel dev
+
+Validation alone works by opening `public/index.html` directly — no server needed.
+The CRM import needs the serverless functions, so it needs `vercel dev` locally or a
+Vercel deployment.
+
+## Layout
+
+    public/index.html   the whole front end: parsing, validation, slicing, import UI
+    api/_zoho.js        token handling and the CRM request wrapper
+    api/fields.js       live module + field schemas, fetched fresh every call
+    api/tags.js         creates a tag on a module if it does not already exist
+    api/import.js       one batch of records, with per-record results
+
+**Credentials live only in the serverless functions.** The browser never receives the
+refresh token, the client secret, or an access token — it only talks to `/api/*`.
+Copy `.env.example` to `.env.local` for local work, and set the same names in the
+Vercel dashboard for deployment.
 
 ## How it works
 

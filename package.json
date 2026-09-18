@@ -1,0 +1,9 @@
+{
+  "name": "agn-outreach-processor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Validate a contact spreadsheet and import it into Zoho CRM",
+  "scripts": {
+    "test": "node test/run.js"
+  }
+}

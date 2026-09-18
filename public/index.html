@@ -107,6 +107,18 @@
   .chip .n{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12.5px}
   .chip:hover .n{color:var(--blue)}
   .chip svg{opacity:.5} .chip:hover svg{opacity:1}
+
+  input[type=text]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;
+                   background:var(--card);color:var(--ink);font:inherit}
+  .hint{color:var(--muted);font-size:12.5px;font-weight:400}
+  .actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px}
+  #impProg{margin-top:18px}
+  #impBar{display:block;height:100%;width:0;background:var(--blue);transition:width .2s}
+  .log{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);
+       padding:10px 12px;max-height:190px;overflow:auto;font-size:12.5px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .log div{padding:1px 0;color:var(--muted)}
+  .log div.ok{color:var(--green)} .log div.err{color:var(--red)} .log div.hd{color:var(--ink)}
   .hide{display:none!important}
 </style>
 </head>
@@ -201,6 +213,33 @@
         <tbody></tbody></table></div>
       <div class="foot" id="reviewFoot"></div>
     </div>
+  </div>
+
+  <div class="card" id="importCard">
+    <div class="step">4 — Import to Zoho CRM</div>
+
+    <div class="grid2">
+      <div><label class="fl">Create as</label>
+        <select id="dest">
+          <option value="Leads">Leads</option>
+          <option value="Contacts">Contacts + Accounts</option>
+        </select></div>
+      <div><label class="fl">Tag <span class="hint">— applied to every record, so the batch stays findable</span></label>
+        <input id="tag" type="text" placeholder="e.g. outreach-2026-09" maxlength="25"></div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="startImport">Import contacts</button>
+      <button id="cancelImport" class="hide">Stop</button>
+      <span class="hint" id="importHint"></span>
+    </div>
+
+    <div id="impProg" class="hide">
+      <div class="bar"><i id="impBar"></i></div>
+      <div class="foot" id="impStats"></div>
+    </div>
+    <div id="impLog" class="log hide"></div>
+    <div id="impSlices"></div>
   </div>
 
 </div>
@@ -672,6 +711,189 @@ function downloadSlice(key, rows){
   });
   download(`outreach-${key}.csv`, out);
 }
+
+/* ========================= CRM import ==================================== */
+/* The browser holds the data and drives the loop; every CRM call goes through
+   our own /api/* routes, which are the only place the Zoho credentials exist.
+   Batching is 100 (Zoho's write limit), so the bar tracks completed work
+   rather than being an animation, and one failed batch costs one batch. */
+
+const BATCH = 100;
+let importing = false, cancelled = false;
+let imported = [], failedRows = [];
+
+/* Step 2 ships an automatic mapping; step 3 replaces this with a mapping UI.
+   Kept deliberately small so it is obvious what is guessed and what is not. */
+function autoMap(r, dest){
+  const orig = dataRows[r.row-2] || [];
+  const pick = pats => {
+    const i = headers.findIndex(h => pats.test(String(h).trim()));
+    return i >= 0 ? String(orig[i] ?? "").trim() : "";
+  };
+  const first = pick(/^first|given/i);
+  const last  = pick(/^last|surname|family/i);
+  const full  = pick(/^(full )?name$|^contact/i);
+  const company = pick(/company|organi[sz]ation|account/i);
+
+  let First_Name = first, Last_Name = last;
+  if(!Last_Name){
+    if(full){ const bits = full.split(/\s+/); First_Name = First_Name || bits.slice(0,-1).join(" "); Last_Name = bits.slice(-1)[0]; }
+    else if(r.email.ok) Last_Name = r.email.value.split("@")[0];
+    else Last_Name = "Unknown";
+  }
+
+  const rec = { Last_Name };
+  if(First_Name) rec.First_Name = First_Name;
+  if(r.email.ok) rec.Email = r.email.value;
+  if(r.phone.ok && r.phone.kind === "mobile") rec.Mobile = r.phone.value;
+  if(r.phone.ok && r.phone.kind === "landline") rec.Phone = r.phone.value;
+  if(company) rec[dest === "Leads" ? "Company" : "Account_Name"] = company;
+  return rec;
+}
+
+function logLine(text, cls){
+  const box = $("impLog"); box.classList.remove("hide");
+  const d = document.createElement("div");
+  if(cls) d.className = cls;
+  d.textContent = text;
+  box.appendChild(d); box.scrollTop = box.scrollHeight;
+}
+
+$("startImport").addEventListener("click", startImport);
+$("cancelImport").addEventListener("click", ()=>{ cancelled = true; $("cancelImport").textContent="Stopping…"; });
+
+async function startImport(){
+  if(importing) return;
+  const rows = results.filter(r => r.bucket !== "neither");
+  if(!rows.length){ $("importHint").textContent = "Nothing to import — load a file first."; return; }
+
+  const dest = $("dest").value;
+  const tag  = $("tag").value.trim();
+
+  importing = true; cancelled = false; imported = []; failedRows = [];
+  $("startImport").disabled = true;
+  $("cancelImport").classList.remove("hide");
+  $("importHint").textContent = "";
+  $("impLog").innerHTML = ""; $("impLog").classList.add("hide");
+  $("impProg").classList.remove("hide");
+  $("impSlices").innerHTML = "";
+
+  try{
+    logLine(`Importing ${rows.length.toLocaleString()} contacts into ${dest}`, "hd");
+
+    if(tag){
+      const t = await api("/api/tags", { module: dest, names: [tag] });
+      if(t.created?.length) logLine(`Tag "${tag}" created on ${dest}`, "ok");
+      else                  logLine(`Tag "${tag}" already existed — reusing it`);
+    }
+
+    const records = rows.map(r => autoMap(r, dest));
+
+    for(let i=0; i<records.length; i+=BATCH){
+      if(cancelled){ logLine("Stopped by user.", "err"); break; }
+
+      const slice = records.slice(i, i+BATCH);
+      const rowSlice = rows.slice(i, i+BATCH);
+      const n = Math.floor(i/BATCH)+1, of = Math.ceil(records.length/BATCH);
+
+      try{
+        const out = await api("/api/import", {
+          module: dest, records: slice, tag: tag || undefined,
+          mode: "insert",
+          accountLinking: dest === "Contacts" ? "create" : "none"
+        });
+
+        (out.notes||[]).forEach(nt => {
+          if(nt.type === "account_created") logLine(`  Account created: ${nt.name}`, "ok");
+          if(nt.type === "account_failed")  logLine(`  Account failed: ${nt.name} — ${nt.message}`, "err");
+        });
+
+        out.results.forEach((res, j) => {
+          const row = rowSlice[j];
+          if(res.ok) imported.push({ row, id: res.id, action: res.action });
+          else       failedRows.push({ row, reason: res.message, code: res.code });
+        });
+
+        logLine(`Batch ${n}/${of}: ${out.counts.inserted} added`+
+                (out.counts.updated?`, ${out.counts.updated} updated`:"")+
+                (out.counts.failed?`, ${out.counts.failed} failed`:""),
+                out.counts.failed ? "err" : "ok");
+      }catch(err){
+        /* a whole batch failed — record every row in it rather than losing them */
+        rowSlice.forEach(row => failedRows.push({ row, reason: err.message, code:"BATCH_FAILED" }));
+        logLine(`Batch ${n}/${of} failed: ${err.message}`, "err");
+      }
+
+      paintImport(i + slice.length, records.length);
+    }
+
+    paintImport(imported.length + failedRows.length, records.length);
+    logLine(`Done — ${imported.length.toLocaleString()} in CRM, `+
+            `${failedRows.length.toLocaleString()} not imported.`, "hd");
+    renderImportSlices();
+  }catch(err){
+    logLine(`Import aborted: ${err.message}`, "err");
+    $("importHint").textContent = err.message;
+  }finally{
+    importing = false;
+    $("startImport").disabled = false;
+    $("cancelImport").classList.add("hide");
+    $("cancelImport").textContent = "Stop";
+  }
+}
+
+function paintImport(done, total){
+  $("impBar").style.width = (total ? 100*done/total : 0) + "%";
+  const remaining = total - done;
+  $("impStats").innerHTML =
+    `<span><b>${imported.length.toLocaleString()}</b> imported</span><span>·</span>`+
+    `<span><b>${failedRows.length.toLocaleString()}</b> failed</span><span>·</span>`+
+    `<span><b>${remaining.toLocaleString()}</b> remaining</span><span>·</span>`+
+    `<span><b>${total.toLocaleString()}</b> total</span>`;
+}
+
+/* the two slices that matter after an import: what landed, and what did not */
+function renderImportSlices(){
+  const box = $("impSlices");
+  const sets = [
+    { key:"imported", label:"Imported",     rows: imported.map(x=>x.row) },
+    { key:"failed",   label:"Not imported", rows: failedRows.map(x=>x.row) }
+  ].filter(s => s.rows.length);
+  if(!sets.length){ box.innerHTML=""; return; }
+
+  const reasonByRow = new Map(failedRows.map(f => [f.row.row, f.reason]));
+  const idByRow     = new Map(imported.map(x => [x.row.row, x.id]));
+
+  box.innerHTML = `<div class="lb" style="margin-top:16px">Download</div><div class="chips">`+
+    sets.map(s=>`<button class="chip" data-k="${s.key}">${DL_ICON}`+
+      `<span>${s.label}</span><span class="n">${s.rows.length.toLocaleString()}</span></button>`).join("")+
+    `</div>`;
+  box.querySelector(".lb").className = "lb";
+  box.querySelectorAll(".chip").forEach(b => b.addEventListener("click", ()=>{
+    const s = sets.find(x => x.key === b.dataset.k);
+    const out = [[...headers, "CRM record id", "Import result"]];
+    s.rows.forEach(r => {
+      const orig = dataRows[r.row-2] || [];
+      out.push([...headers.map((_,i)=>orig[i]??""),
+                idByRow.get(r.row) || "",
+                reasonByRow.get(r.row) || "imported"]);
+    });
+    download(`crm-${s.key}.csv`, out);
+  }));
+}
+
+async function api(path, body){
+  const res = await fetch(path, {
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify(body)
+  });
+  let json = null;
+  try{ json = await res.json(); }catch{}
+  if(!res.ok || json?.error) throw new Error(json?.error || `${path} returned ${res.status}`);
+  return json;
+}
+
 </script>
 </body>
 </html>
