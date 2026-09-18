@@ -241,11 +241,9 @@
   <div class="card" id="mapCard">
     <div class="step">3 — Map to Zoho CRM</div>
 
-    <div class="grid2">
-      <div><label class="fl">Create as</label>
-        <select id="dest"><option value="">Loading modules…</option></select></div>
-      <div><label class="fl">Tag <span class="hint">— created if new, applied to every record</span></label>
-        <input id="tag" type="text" placeholder="none — records will not be grouped" maxlength="25"></div>
+    <div>
+      <label class="fl">Tag <span class="hint">— created if new, applied to every record, so the batch stays findable</span></label>
+      <input id="tag" type="text" placeholder="none — records will not be grouped" maxlength="25">
     </div>
 
     <div id="mapBox" class="hide">
@@ -623,6 +621,10 @@ function downloadSlice(key, rows){
    session — an admin can add a field or make one mandatory at any time, and an
    import built against yesterday's schema fails confusingly. */
 
+/* Everything imports as a Lead. Contacts-with-Accounts was built and tested,
+   and the API still accepts it, but the UI no longer offers the choice. */
+const DEST = "Leads";
+
 let crmFields = [], crmMandatory = [], mappings = [], mappingTouched = false;
 
 /* The engine is pure: the page owns the state and hands it over.
@@ -641,9 +643,8 @@ const nameParts = r => Engine.splitName(r, ctx());
 
 async function loadModules(){
   try{
-    const d = await apiGet("/api/fields");
+    const d = await apiGet(`/api/fields?module=${DEST}`);
     if(!d.configured){
-      $("dest").innerHTML = `<option value="">Not connected</option>`;
       $("mapBox").classList.remove("hide");
       $("mapHint").textContent =
         `Zoho is not connected yet — set ${d.missing.join(", ")} in the Vercel dashboard, `+
@@ -651,36 +652,23 @@ async function loadModules(){
       $("importHint").textContent = "Connect Zoho to import.";
       return;
     }
-    $("dest").innerHTML = d.modules.map(m =>
-      `<option value="${m.api_name}">${m.api_name==="Contacts"?"Contacts + Companies":m.label}</option>`
-    ).join("");
-    await loadFields($("dest").value);
+    applyFields(d);
   }catch(err){
-    $("dest").innerHTML = `<option value="">Unavailable</option>`;
     $("mapBox").classList.remove("hide");
     $("mapHint").textContent = `Could not reach the CRM: ${err.message}`;
     $("importHint").textContent = "Import unavailable.";
   }
 }
 
-async function loadFields(module){
-  if(!module) return;
-  $("mapHint").textContent = "Loading fields…";
-  try{
-    const d = await apiGet(`/api/fields?module=${encodeURIComponent(module)}`);
-    crmFields = d.fields; crmMandatory = d.mandatory;
-    seedMappings();
-    $("mapBox").classList.remove("hide");
-    $("checkDupes").disabled = false;
-    $("mapHint").textContent = `${crmFields.length} fields available in ${module}.`;
-  }catch(err){
-    $("mapHint").textContent = `Could not load ${module} fields: ${err.message}`;
-  }
+function applyFields(d){
+  crmFields = d.fields; crmMandatory = d.mandatory;
+  seedMappings();
+  $("mapBox").classList.remove("hide");
+  $("checkDupes").disabled = false;
+  $("mapHint").textContent = `${crmFields.length} fields available in ${DEST}.`;
 }
 
-/* Seed one sensible pairing so the common case needs no work, while leaving
-   every one of them visible and changeable. */
-/* Seeded on module load AND again when a file arrives.
+/* Seeded on page load AND again when a file arrives.
    Column pairings need the spreadsheet headers, which do not exist until a file
    is dropped — seeding only on module load silently lost every column-based
    pairing, Company among them, and the records imported without it. Re-seeding
@@ -829,7 +817,6 @@ function validateMapping(){
   return ok;
 }
 
-$("dest").addEventListener("change", e => { mappingTouched = false; loadFields(e.target.value); });
 $("addMap").addEventListener("click", () => {
   mappingTouched = true;
   mappings.push({ field:"", type:"", key:null });
@@ -870,14 +857,12 @@ async function runPreflight(announce){
   const rows  = results.filter(r => r.bucket !== "neither");
   if(!field || !rows.length){ preflight = null; $("preflight").classList.add("hide"); return null; }
 
-  const dest = $("dest").value;
   $("checkDupes").disabled = true;
   $("checkDupes").textContent = "Checking…";
   try{
     const values = [...new Set(rows.map(r => matchValue(r, field)).filter(Boolean))];
     const out = await api("/api/lookup", {
-      module: dest, field, values,
-      extra: dest === "Contacts" ? ["Last_Name","Account_Name"] : ["Last_Name","Company"]
+      module: DEST, field, values, extra: ["Last_Name","Company"]
     });
 
     const matched = [], fresh = [];
@@ -909,7 +894,7 @@ function paintPreflight(){
   if(!matched.length){
     box.classList.remove("warn");
     box.innerHTML = `<b>${fresh.length.toLocaleString()}</b> contacts, none of them already in `+
-      `${$("dest").value}. Nothing will be overwritten.`;
+      `${DEST}. Nothing will be overwritten.`;
     return;
   }
   box.classList.add("warn");
@@ -918,7 +903,7 @@ function paintPreflight(){
              : `<b>left untouched</b>`;
   box.innerHTML =
     `<b>${matched.length.toLocaleString()}</b> of ${(matched.length+fresh.length).toLocaleString()} `+
-    `already exist in ${$("dest").value}, matched on ${field}. `+
+    `already exist in ${DEST}, matched on ${field}. `+
     `They will be ${verb}.`+
     `<div class="sub"><b>${fresh.length.toLocaleString()}</b> new record`+
     `${fresh.length===1?"":"s"} will be created.</div>`;
@@ -951,8 +936,7 @@ async function startImport(){
   if(!rows.length){ $("importHint").textContent = "Nothing to import — load a file first."; return; }
 
   if(!validateMapping()){ $("importHint").textContent = "Finish the field mapping first."; return; }
-  const dest = $("dest").value;
-  const tag  = $("tag").value.trim();
+  const tag = $("tag").value.trim();
 
   importing = true; cancelled = false; imported = []; failedRows = []; skippedRows = [];
   $("startImport").disabled = true;
@@ -963,14 +947,14 @@ async function startImport(){
   $("impSlices").innerHTML = "";
 
   try{
-    logLine(`Importing ${rows.length.toLocaleString()} contacts into ${dest}`, "hd");
+    logLine(`Importing ${rows.length.toLocaleString()} contacts into ${DEST}`, "hd");
 
     /* An empty tag used to do nothing and say nothing, so an import that was
        meant to be traceable finished looking entirely successful and left no
        way to find its records afterwards. Silence is the bug; say so. */
     if(tag){
-      const t = await api("/api/tags", { module: dest, names: [tag] });
-      if(t.created?.length) logLine(`Tag "${tag}" created on ${dest}`, "ok");
+      const t = await api("/api/tags", { module: DEST, names: [tag] });
+      if(t.created?.length) logLine(`Tag "${tag}" created on ${DEST}`, "ok");
       else                  logLine(`Tag "${tag}" already existed — reusing it`);
     }else{
       logLine(`No tag set — these records will not be grouped or findable later.`, "err");
@@ -1011,29 +995,11 @@ async function startImport(){
         const slice    = rowSlice.map(toRecord);
         const n = Math.floor(i/BATCH)+1, of = Math.ceil(g.rows.length/BATCH);
 
-        /* the account each existing contact sits on today, so the server can
-           report when an update moves one to a different company */
-        const currentAccounts = {};
-        if(dest === "Contacts" && g.mode === "upsert"){
-          rowSlice.forEach((r,j) => {
-            const hit = plan.existing[matchValue(r, field)];
-            if(hit?.account) currentAccounts[j] = hit.account;
-          });
-        }
-
         try{
           const out = await api("/api/import", {
-            module: dest, records: slice, tag: tag || undefined,
+            module: DEST, records: slice, tag: tag || undefined,
             mode: g.mode,
-            duplicateCheck: g.mode === "upsert" && field ? [field] : [],
-            accountLinking: dest === "Contacts" ? "create" : "none",
-            currentAccounts
-          });
-
-          (out.notes||[]).forEach(nt => {
-            if(nt.type === "account_created") logLine(`  Account created: ${nt.name}`, "ok");
-            if(nt.type === "account_failed")  logLine(`  Account failed: ${nt.name} — ${nt.message}`, "err");
-            if(nt.type === "account_changed") logLine(`  Company changed: ${nt.from} → ${nt.to}`, "ok");
+            duplicateCheck: g.mode === "upsert" && field ? [field] : []
           });
 
           out.results.forEach((res, j) => {
@@ -1053,7 +1019,7 @@ async function startImport(){
              isolate it — about seven extra calls in the worst case, and only
              when something actually failed. */
           logLine(`${g.what} batch ${n}/${of} rejected — isolating the bad rows…`, "err");
-          await sendSplit(rowSlice, dest, tag, g, field, currentAccounts);
+          await sendSplit(rowSlice, tag, g, field);
         }
 
         sent += rowSlice.length;
@@ -1143,14 +1109,12 @@ function renderImportSlices(){
 
 /* Re-send the rows Zoho rejected as duplicates, this time as updates. */
 /* the halving algorithm lives in engine.js so it can be tested directly */
-async function sendSplit(rows, dest, tag, g, field, currentAccounts){
+async function sendSplit(rows, tag, g, field){
   await Engine.sendInHalves(rows,
     slice => api("/api/import", {
-      module: dest, records: slice.map(toRecord), tag: tag || undefined,
+      module: DEST, records: slice.map(toRecord), tag: tag || undefined,
       mode: g.mode,
-      duplicateCheck: g.mode === "upsert" && field ? [field] : [],
-      accountLinking: dest === "Contacts" ? "create" : "none",
-      currentAccounts: slice.length === rows.length ? currentAccounts : {}
+      duplicateCheck: g.mode === "upsert" && field ? [field] : []
     }).then(out => out.results),
     (row, res) => {
       if(res.ok) imported.push({ row, id: res.id, action: res.action });
@@ -1171,14 +1135,13 @@ async function retryAsUpdates(){
   failedRows = failedRows.filter(f => f.code !== "DUPLICATE_DATA");
   logLine(`Retrying ${rows.length} rejected row${rows.length===1?"":"s"} as updates…`, "hd");
 
-  const dest = $("dest").value, tag = $("tag").value.trim();
+  const tag = $("tag").value.trim();
   for(let i=0; i<rows.length; i+=BATCH){
     const rowSlice = rows.slice(i, i+BATCH);
     try{
       const out = await api("/api/import", {
-        module: dest, records: rowSlice.map(toRecord), tag: tag || undefined,
-        mode:"upsert", duplicateCheck:[field],
-        accountLinking: dest === "Contacts" ? "create" : "none"
+        module: DEST, records: rowSlice.map(toRecord), tag: tag || undefined,
+        mode:"upsert", duplicateCheck:[field]
       });
       out.results.forEach((res,j) => {
         if(res.ok) imported.push({ row: rowSlice[j], id: res.id, action: res.action });
