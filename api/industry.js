@@ -1,15 +1,15 @@
 import { handler, readBody, HttpError } from "./_zoho.js";
 
-/* Guess the industry of an uploaded contact list.
+/* Map the file's own industry column onto one of our flow options.
  *
- * Delegates to the `send_to_gemini_standalone` Deluge function in the AGN CRM
- * org, which already holds the Gemini keys, rotates through them and falls back
- * across models. Re-implementing that here would duplicate a moving part that
- * is maintained elsewhere.
+ * The file already states the industry; it just states it in its own words —
+ * "Property Development", "Real-estate brokerage", "RE" — which will not match
+ * a fixed dropdown. So the distinct values from that column are handed to the
+ * `send_to_gemini_standalone` function in the AGN CRM org, which already holds
+ * the Gemini keys, rotates them and falls back across models.
  *
- * What is sent: company names and non-free email domains only. Never a person's
- * name, address or phone number — the domain and the company are what identify
- * an industry, and the rest would leave the machine for no benefit.
+ * Nothing else is sent. Not names, not emails, not phone numbers, not company
+ * names — the industry column is the whole signal.
  */
 
 const INDUSTRIES = [
@@ -20,13 +20,7 @@ const INDUSTRIES = [
   "Government & Public Sector", "Non-profit", "Other"
 ];
 
-/* A personal mailbox says nothing about an industry, so these are dropped
-   rather than sent. */
-const FREE_MAIL = new Set(["gmail.com","hotmail.com","outlook.com","yahoo.com","icloud.com",
-  "live.com","aol.com","msn.com","protonmail.com","me.com","yahoo.co.uk","googlemail.com"]);
-
-const MAX_COMPANIES = 40;
-const MAX_DOMAINS   = 25;
+const MAX_VALUES = 40;
 
 export default handler(async (req) => {
   if(req.method !== "POST") throw new HttpError(405, "Use POST.");
@@ -35,25 +29,43 @@ export default handler(async (req) => {
   if(!zapikey) return { ok:false, reason:"not_configured",
     message:"Industry detection is off — set ZOHO_STANDALONE_ZAPIKEY to enable it." };
 
-  const { companies = [], domains = [] } = readBody(req);
+  const { values = [] } = readBody(req);
 
-  const coList = [...new Set(companies.map(c => String(c||"").trim()).filter(Boolean))]
-                   .slice(0, MAX_COMPANIES);
-  const dmList = [...new Set(domains.map(d => String(d||"").trim().toLowerCase())
-                                    .filter(d => d && !FREE_MAIL.has(d)))]
-                   .slice(0, MAX_DOMAINS);
-
-  if(!coList.length && !dmList.length)
+  /* Count the distinct spellings so the prompt can say which dominates — a
+     file with 900 "Real Estate" rows and 3 "Construction" ones targets real
+     estate, and the majority should not be a coin toss. */
+  const tally = new Map();
+  for(const v of values){
+    const k = String(v||"").trim();
+    if(!k) continue;
+    tally.set(k, (tally.get(k)||0) + 1);
+  }
+  if(!tally.size)
     return { ok:false, reason:"no_signal",
-             message:"No company names or business email domains to judge by." };
+             message:"The industry column is empty." };
 
+  const ranked = [...tally.entries()].sort((a,b) => b[1]-a[1]).slice(0, MAX_VALUES);
+
+  /* If the column already says exactly what the dropdown says, there is nothing
+     to interpret — answer without a round trip, and without the values leaving
+     the machine at all. */
+  const top = ranked[0][0];
+  const exact = INDUSTRIES.find(i => i.toLowerCase() === top.toLowerCase());
+  if(exact && ranked.length === 1)
+    return { ok:true, industry:exact, confidence:"high",
+             reason:"The industry column already matches this option exactly.",
+             judgedOn:{ values: tally.size, matched:"exact" } };
+
+  const total = [...tally.values()].reduce((a,b)=>a+b, 0);
   const prompt =
-    "These come from a single contact list, which normally targets one industry.\n" +
-    "Choose the ONE industry from the allowed list that fits the majority.\n" +
-    "If they clearly do not share an industry, answer \"Other\" and say so in the reason.\n" +
-    "Judge only from the names and domains below; do not invent details.\n\n" +
-    (coList.length ? "Companies:\n" + coList.map(c => "- " + c).join("\n") + "\n\n" : "") +
-    (dmList.length ? "Email domains:\n" + dmList.map(d => "- " + d).join("\n") + "\n" : "");
+    "A contact list has an industry column. These are its distinct values with " +
+    "how many rows carry each, most common first.\n" +
+    "Map the list to the ONE industry from the allowed list that fits the " +
+    "majority of rows.\n" +
+    "The wording will not match the allowed list exactly — interpret it.\n" +
+    "If the values genuinely span unrelated industries, answer \"Other\" and say so.\n\n" +
+    ranked.map(([v,n]) => `- ${v} (${n} row${n===1?"":"s"})`).join("\n") +
+    `\n\nTotal rows with a value: ${total}.`;
 
   /* A schema with an enum means the answer is always one of our own options —
      no fuzzy matching of free text back onto the dropdown afterwards. */
@@ -99,6 +111,6 @@ export default handler(async (req) => {
     industry:   parsed.industry,
     confidence: parsed.confidence || "medium",
     reason:     parsed.reason || "",
-    judgedOn:   { companies: coList.length, domains: dmList.length }
+    judgedOn:   { values: tally.size, matched:"interpreted" }
   };
 });

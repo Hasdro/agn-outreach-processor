@@ -915,10 +915,10 @@ function paintPreflight(){
 }
 
 /* ========================= industry detection ============================ */
-/* The flow a list enters follows the industry it targets, and a list normally
-   targets one. Rather than make the user work that out and pick it, the company
-   names and business email domains are handed to the Gemini standalone in the
-   AGN CRM org, which answers with one of this dropdown's own options.
+/* The file states its own industry, just not in this dropdown's words. The
+   distinct values of its industry column go to the Gemini standalone in the AGN
+   CRM org, which answers with one of these exact options. A column that already
+   matches an option is resolved without any call at all.
    It is a suggestion: the field stays editable, and a failure never blocks
    anything — the dropdown simply stays as the user left it. */
 
@@ -929,39 +929,42 @@ async function detectIndustry(){
   if(flowTouched) return;                       // never overwrite a human choice
   const note = $("flowNote");
 
-  /* Only what identifies an industry leaves the machine: company names and
-     business email domains. No personal names, addresses or numbers. */
-  const ci = headers.findIndex(h => /company|organi[sz]ation|account|employer|business/i.test(String(h).trim()));
-  const companies = ci >= 0
-    ? dataRows.map(r => String(r[ci] ?? "").trim()).filter(Boolean)
-    : [];
-  const domains = results
-    .filter(r => r.email.ok)
-    .map(r => r.email.value.split("@")[1]);
+  /* The file's own industry column is the only signal. Nothing else is sent:
+     not names, not emails, not phone numbers, not company names. */
+  const ci = headers.findIndex(h =>
+    /^(industry|sector|vertical|business ?type|category)$/i.test(String(h).trim()));
 
-  if(!companies.length && !domains.length){ note.textContent = ""; return; }
+  if(ci < 0){
+    note.textContent = "No industry column in this file — pick a flow.";
+    return;
+  }
 
-  note.textContent = "Detecting industry…";
+  const values = dataRows.map(r => String(r[ci] ?? "").trim()).filter(Boolean);
+  if(!values.length){ note.textContent = "The industry column is empty — pick a flow."; return; }
+
+  note.textContent = "Reading the industry column…";
   try{
-    const d = await api("/api/industry", { companies, domains });
+    const d = await api("/api/industry", { values });
     if(flowTouched){ note.textContent = ""; return; }   // chosen while we waited
     if(!d.ok){
       note.textContent =
         d.reason === "not_configured" ? "" :
-        d.reason === "no_signal"      ? "No company names or business email domains to judge by."
-                                      : "Could not detect the industry — pick one.";
+        d.reason === "no_signal"      ? "The industry column is empty — pick a flow."
+                                      : "Could not read the industry — pick a flow.";
       return;
     }
     $("flow").value = d.industry;
     const sure = { high:"", medium:" (worth a check)", low:" (low confidence — worth a check)" }[d.confidence] || "";
-    note.innerHTML = `Detected <b>${esc(d.industry)}</b>${esc(sure)} from `+
-      `${d.judgedOn.companies} company name${d.judgedOn.companies===1?"":"s"}`+
-      `${d.judgedOn.domains?` and ${d.judgedOn.domains} domain${d.judgedOn.domains===1?"":"s"}`:""}. `+
+    const from = d.judgedOn.matched === "exact"
+      ? "the industry column"
+      : `${d.judgedOn.values} value${d.judgedOn.values===1?"":"s"} in the industry column`;
+    note.innerHTML = `Set to <b>${esc(d.industry)}</b>${esc(sure)} from ${from}. `+
       `Change it if that is wrong.`;
   }catch(err){
-    note.textContent = flowTouched ? "" : "Could not detect the industry — pick one.";
+    note.textContent = flowTouched ? "" : "Could not read the industry — pick a flow.";
   }
 }
+
 
 /* ========================= CRM import ==================================== */
 /* The browser holds the data and drives the loop; every CRM call goes through
