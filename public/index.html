@@ -283,8 +283,8 @@
     <div id="preflight" class="pf hide"></div>
 
     <div class="actions">
-      <button id="checkDupes">Check for existing records</button>
-      <button class="primary" id="startImport">Import contacts</button>
+      <button id="checkDupes" disabled>Check for existing records</button>
+      <button class="primary" id="startImport" disabled>Import contacts</button>
       <button id="cancelImport" class="hide">Stop</button>
       <span class="hint" id="importHint"></span>
     </div>
@@ -648,9 +648,12 @@ async function loadModules(){
   try{
     const d = await apiGet("/api/fields");
     if(!d.configured){
-      $("dest").innerHTML = `<option value="">Not configured</option>`;
+      $("dest").innerHTML = `<option value="">Not connected</option>`;
+      $("mapBox").classList.remove("hide");
       $("mapHint").textContent =
-        `Set ${d.missing.join(", ")} in the Vercel dashboard to enable importing.`;
+        `Zoho is not connected yet — set ${d.missing.join(", ")} in the Vercel dashboard, `+
+        `then redeploy. Validation and the downloads above work without it.`;
+      $("importHint").textContent = "Connect Zoho to import.";
       return;
     }
     $("dest").innerHTML = d.modules.map(m =>
@@ -659,7 +662,9 @@ async function loadModules(){
     await loadFields($("dest").value);
   }catch(err){
     $("dest").innerHTML = `<option value="">Unavailable</option>`;
+    $("mapBox").classList.remove("hide");
     $("mapHint").textContent = `Could not reach the CRM: ${err.message}`;
+    $("importHint").textContent = "Import unavailable.";
   }
 }
 
@@ -671,6 +676,7 @@ async function loadFields(module){
     crmFields = d.fields; crmMandatory = d.mandatory;
     seedMappings();
     $("mapBox").classList.remove("hide");
+    $("checkDupes").disabled = false;
     $("mapHint").textContent = `${crmFields.length} fields available in ${module}.`;
   }catch(err){
     $("mapHint").textContent = `Could not load ${module} fields: ${err.message}`;
