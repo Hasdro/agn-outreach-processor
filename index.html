@@ -82,6 +82,8 @@
   .foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;
         font-size:13.5px;color:var(--muted)}
   .foot b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .foot .link b{color:inherit}          /* the count inside the link stays link-coloured */
+  .foot>span:not([style]){color:var(--muted)}
   .rule{color:var(--muted);font-size:12.5px;margin:14px 0 0;padding-top:14px;
         border-top:1px solid var(--line)}
 
@@ -523,19 +525,28 @@ function countTo(el, to){
 
 function finish(total){
   setTimeout(()=>{ $("prog").style.display="none"; }, 250);
-  const den="/"+total.toLocaleString();
+
+  /* The denominator is the ROUTABLE count, not the row count. Three tiles over
+     "/604" cannot sum to 604 when 60 rows were skipped — the parts of a part/whole
+     display have to add up to the whole shown, or the screen is lying. The row
+     count and the skipped count are reconciled on the line underneath instead. */
+  const routable=counts.email+counts.phone+counts.both;
+  const skipped=counts.neither;
+  const den="/"+routable.toLocaleString();
+
   [["Email",counts.email],["Phone",counts.phone],["Both",counts.both]].forEach(([k,v])=>{
     countTo($("n"+k), v);
     $("d"+k).textContent=den;
-    $("b"+k).style.width=(total? 100*v/total : 0)+"%";
+    $("b"+k).style.width=(routable? 100*v/routable : 0)+"%";
   });
 
-  const routable=counts.email+counts.phone+counts.both;
-  const skipped=counts.neither;
   const f=$("foot"); f.classList.remove("hide");
   f.innerHTML =
-    `<span><b>${routable.toLocaleString()}</b> of <b>${total.toLocaleString()}</b> ready to send</span>`+
-    (skipped?`<span>·</span><button class="link" id="toggleReview">${skipped.toLocaleString()} skipped</button>`:"")+
+    `<span><b>${routable.toLocaleString()}</b> ready to send</span><span>·</span>`+
+    (skipped
+      ? `<button class="link" id="toggleReview"><b>${skipped.toLocaleString()}</b> skipped</button><span>·</span>`
+      : `<span><b>0</b> skipped</span><span>·</span>`)+
+    `<span><b>${total.toLocaleString()}</b> rows in file</span>`+
     `<span style="margin-left:auto"></span>`+
     `<button id="dlRouted">Export</button>`;
   if(skipped) $("toggleReview").addEventListener("click",toggleReview);

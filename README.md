@@ -23,7 +23,11 @@ all; `.xlsx` needs [SheetJS](https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/
 from the CDN.
 
 Drop `sample-contacts.csv` on it to try it — 604 rows that should bucket as
-**121 email only / 62 phone only / 361 both / 60 skipped**.
+**121 email only / 62 phone only / 361 both**, with **60 skipped**.
+
+The tile denominator is the *routable* count, not the row count, so the three tiles
+always sum to it (121 + 62 + 361 = 544). The line underneath reconciles that back to
+the file: 544 ready to send + 60 skipped = 604 rows.
 
 ## Validation rules
 
