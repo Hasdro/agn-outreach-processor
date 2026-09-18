@@ -1,0 +1,10 @@
+# Never upload local credentials. The Zoho values belong in the Vercel
+# dashboard's environment variables, not in the deployment bundle.
+.env
+.env.local
+.env.*.local
+
+# Not needed at runtime
+test/
+node_modules/
+*.log
