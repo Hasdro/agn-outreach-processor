@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outreach Agent</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f5f7; --card:#fff; --ink:#15181d; --muted:#858d98; --line:#e8eaee;
+    --blue:#2f6df6; --green:#10a45c; --purple:#7c4ded; --red:#dc4b4b;
+    --tint:#eef3ff; --edge:#cfdeff;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#111317; --card:#1a1d23; --ink:#e9ebee; --muted:#8d949f; --line:#282c34;
+           --tint:#1a2231; --edge:#2b4372; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:44px 20px 100px}
+  h1{font-size:19px;font-weight:640;letter-spacing:-.01em;margin:0 0 26px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+        padding:22px;margin-bottom:16px}
+  .step{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+        color:var(--muted);margin-bottom:16px}
+  svg{display:block}
+
+  /* ---- dropzone ---- */
+  #drop{border:2px dashed var(--edge);background:var(--tint);border-radius:13px;
+        padding:40px 20px;text-align:center;cursor:pointer;transition:.15s}
+  #drop:hover,#drop.over{border-color:var(--blue)}
+  #drop.over{transform:scale(1.005)}
+  #drop svg{margin:0 auto 10px;color:var(--blue)}
+  #drop .t{font-weight:640;font-size:16px}
+  #drop .h{color:var(--muted);font-size:13.5px;margin-top:3px}
+
+  /* file chip, shown instead of the dropzone once loaded */
+  #chip{display:none;align-items:center;gap:12px;border:1px solid var(--line);
+        border-radius:12px;padding:13px 15px}
+  #chip svg{color:var(--blue);flex:none}
+  #chip .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #chip .ct{color:var(--muted);font-size:13px}
+  #chip .sp{margin-left:auto;display:flex;gap:6px;flex:none}
+
+  /* ---- controls ---- */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  label.fl{display:block;margin-bottom:7px;font-size:13.5px;color:var(--muted)}
+  select{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;
+         background:var(--card);color:var(--ink);font:inherit}
+  select:disabled{color:var(--muted)}
+  button{font:inherit;font-size:13.5px;border:1px solid var(--line);background:var(--card);
+         color:var(--ink);padding:7px 13px;border-radius:9px;cursor:pointer;transition:.12s}
+  button:hover{border-color:var(--muted)}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  button.primary:hover{filter:brightness(1.08)}
+  .link{border:0;background:none;color:var(--blue);padding:0;font-size:13.5px}
+  .link:hover{text-decoration:underline;border:0}
+
+  /* ---- progress ---- */
+  #prog{display:none;margin-top:16px}
+  .bar{height:5px;background:var(--line);border-radius:99px;overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;background:var(--blue);transition:width .1s linear}
+
+  /* ---- tiles ---- */
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:680px){.tiles{grid-template-columns:1fr}}
+  .tile{position:relative;border:1px solid var(--line);border-radius:13px;padding:18px 16px;
+        overflow:hidden}
+  .tile::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--c)}
+  .tile .hd{display:flex;align-items:center;gap:8px;color:var(--c)}
+  .tile .hd .nm{font-weight:640;font-size:13.5px;color:var(--ink)}
+  .tile .num{font-size:32px;font-weight:660;letter-spacing:-.025em;margin-top:12px;
+             font-variant-numeric:tabular-nums;line-height:1}
+  .tile .den{color:var(--muted);font-size:15px;font-weight:500;letter-spacing:0}
+  .tile .pb{height:4px;border-radius:99px;background:var(--line);margin-top:12px;overflow:hidden}
+  .tile .pb>i{display:block;height:100%;width:0;background:var(--c);transition:width .5s ease-out}
+  .tile .ds{color:var(--muted);font-size:12.5px;margin-top:9px}
+  .t-email{--c:var(--blue)} .t-phone{--c:var(--green)} .t-both{--c:var(--purple)}
+
+  .foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;
+        font-size:13.5px;color:var(--muted)}
+  .foot b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .rule{color:var(--muted);font-size:12.5px;margin:14px 0 0;padding-top:14px;
+        border-top:1px solid var(--line)}
+
+  /* ---- review ---- */
+  #review{display:none;margin-top:16px;border-top:1px solid var(--line);padding-top:16px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+  th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+     font-weight:600}
+  td.why{color:var(--muted)}
+  .scroll{overflow-x:auto}
+  .fix{display:none;align-items:center;gap:10px;flex-wrap:wrap;background:var(--tint);
+       border:1px solid var(--edge);border-radius:11px;padding:12px 14px;margin-top:16px;
+       font-size:13.5px}
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Outreach Agent</h1>
+
+  <div class="card">
+    <div class="step">1 — Upload contact file</div>
+    <div id="drop">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3v4a1 1 0 0 0 1 1h4"/>
+        <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>
+        <path d="M9 13h6M9 17h6"/></svg>
+      <div class="t">Drop your Excel file here</div>
+      <div class="h">.xlsx, .xls or .csv — up to 10,000 rows</div>
+    </div>
+    <div id="chip">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 3v4a1 1 0 0 0 1 1h4"/>
+        <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg>
+      <div><div class="nm" id="chipName"></div><div class="ct" id="chipCount"></div></div>
+      <div class="sp"><button class="link" id="cols">Columns</button>
+                     <button class="link" id="reset">Remove</button></div>
+    </div>
+    <div id="prog"><div class="bar"><i></i></div></div>
+    <div id="mapping" class="hide" style="margin-top:16px">
+      <div class="grid2">
+        <div><label class="fl">Email column</label><select id="colEmail"></select></div>
+        <div><label class="fl">Phone column</label><select id="colPhone"></select></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">2 — Select industry &amp; email flow</div>
+    <div class="grid2">
+      <div><label class="fl">Industry</label>
+        <select id="industry"><option value="">Choose industry…</option></select></div>
+      <div><label class="fl">Map to email flow</label>
+        <select id="flow" disabled><option>Select industry first</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">3 — Channel routing</div>
+    <div class="tiles">
+      <div class="tile t-email">
+        <div class="hd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>
+          <span class="nm">Email only</span></div>
+        <div class="num"><span id="nEmail">—</span><span class="den" id="dEmail"></span></div>
+        <div class="pb"><i id="bEmail"></i></div>
+        <div class="ds">Email sequence</div>
+      </div>
+      <div class="tile t-phone">
+        <div class="hd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 21l2.1-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/></svg>
+          <span class="nm">Phone only</span></div>
+        <div class="num"><span id="nPhone">—</span><span class="den" id="dPhone"></span></div>
+        <div class="pb"><i id="bPhone"></i></div>
+        <div class="ds">WhatsApp flow</div>
+      </div>
+      <div class="tile t-both">
+        <div class="hd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>
+          <span class="nm">Both</span></div>
+        <div class="num"><span id="nBoth">—</span><span class="den" id="dBoth"></span></div>
+        <div class="pb"><i id="bBoth"></i></div>
+        <div class="ds">Both in parallel</div>
+      </div>
+    </div>
+
+    <div class="foot hide" id="foot"></div>
+    <p class="rule">Contacts with both details start both channels at once — WhatsApp follows up
+       24h after any unopened email.</p>
+
+    <div class="fix" id="fix"></div>
+
+    <div id="review">
+      <div class="scroll"><table id="tbl">
+        <thead><tr><th>Row</th><th>Email</th><th>Phone</th><th>Why skipped</th></tr></thead>
+        <tbody></tbody></table></div>
+      <div class="foot" id="reviewFoot"></div>
+    </div>
+  </div>
+
+</div>
+
+  <input type="file" id="file" class="hide" accept=".xlsx,.xls,.csv">
+<script>
+const MAX_ROWS = 10000;
+
+/* --- section 2 config: industry -> the email flows it may map to ---------- */
+const INDUSTRY_FLOWS = {
+  "Real Estate":        ["Off-plan launch", "Investor nurture", "Cold outreach"],
+  "Retail & E-commerce":["Store launch", "Seasonal promo", "Cold outreach"],
+  "Healthcare":         ["Clinic onboarding", "Patient re-activation"],
+  "Education":          ["Course enrolment", "Webinar invite"],
+  "Hospitality":        ["Venue promo", "Corporate rates"],
+  "Professional Services":["Consultation offer", "Cold outreach"],
+  "Construction":       ["Project enquiry", "Supplier intro"],
+  "Other":              ["Generic nurture", "Cold outreach"]
+};
+
+/* --- email reference data ------------------------------------------------ */
+const PLACEHOLDERS = new Set(["noemail","no-email","none","n/a","na","null","test","abc","xxx",
+  "nil","unknown","tbd","-","0","email","na@na.com","test@test.com","abc@abc.com"]);
+const DISPOSABLE = ["mailinator.com","tempmail","10minutemail","guerrillamail","yopmail",
+  "throwaway","trashmail","sharklasers","getnada","dispostable","maildrop.cc","fakeinbox"];
+const ROLE_LOCALS = new Set(["info","sales","admin","support","contact","hr","careers","office",
+  "enquiry","enquiries","marketing","accounts","billing","hello","team","mail","help"]);
+const KNOWN_DOMAINS = ["gmail.com","hotmail.com","outlook.com","yahoo.com","icloud.com","live.com",
+  "aol.com","msn.com","protonmail.com","me.com","emirates.net.ae","eim.ae","yahoo.co.uk"];
+
+/* --- UAE phone reference ------------------------------------------------- */
+const MOBILE_SECOND = new Set(["0","2","4","5","6","8"]);   // +9715X…
+const LANDLINE_AREA = new Set(["2","3","4","6","7","9"]);   // Abu Dhabi, Al Ain, Dubai, …
+
+/* ========================= validators ==================================== */
+
+/* Damerau-Levenshtein (optimal string alignment): a transposition costs 1, not 2.
+   That matters — "gmial.com" is a swap, and it is the single most common typo. */
+function editDistance(a,b){
+  const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
+  const d=Array.from({length:m+1},(_,i)=>{const r=new Array(n+1).fill(0);r[0]=i;return r;});
+  for(let j=0;j<=n;j++) d[0][j]=j;
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      const c = a[i-1]===b[j-1]?0:1;
+      d[i][j]=Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+c);
+      if(i>1&&j>1&&a[i-1]===b[j-2]&&a[i-2]===b[j-1])
+        d[i][j]=Math.min(d[i][j], d[i-2][j-2]+1);
+    }
+  }
+  return d[m][n];
+}
+
+/* Tier 1 syntax + Tier 2 junk filter. Returns
+   {ok, value, reason, role, suggestion} */
+function validateEmail(raw){
+  let s = String(raw ?? "")
+    .replace(/[​-‍﻿]/g,"")   // zero-width junk from copy/paste
+    .trim()
+    .replace(/^mailto:/i,"")                // after the trim, or a leading space defeats it
+    .trim();
+  if(!s) return {ok:false, value:"", reason:"EMPTY"};
+
+  // a cell holding several addresses — take the first, flag it
+  let multi = false;
+  if(/[;,\s]/.test(s)){ const first = s.split(/[;,\s]+/)[0]; if(first!==s){ multi=true; s=first; } }
+
+  if(PLACEHOLDERS.has(s.toLowerCase())) return {ok:false, value:s, reason:"PLACEHOLDER"};
+
+  const at = s.indexOf("@");
+  if(at<0 || s.indexOf("@",at+1)>=0) return {ok:false, value:s, reason:"SYNTAX_AT"};
+  let local = s.slice(0,at), domain = s.slice(at+1).toLowerCase();  // domain is case-insensitive
+  if(PLACEHOLDERS.has(local.toLowerCase())) return {ok:false, value:s, reason:"PLACEHOLDER"};
+
+  if(local.length<1 || local.length>64) return {ok:false, value:s, reason:"SYNTAX_LOCAL_LEN"};
+  if(domain.length<4 || domain.length>255) return {ok:false, value:s, reason:"SYNTAX_DOMAIN_LEN"};
+  if(!/^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+$/.test(local)) return {ok:false,value:s,reason:"SYNTAX_LOCAL_CHARS"};
+  if(local.startsWith(".")||local.endsWith(".")||local.includes("..")) return {ok:false,value:s,reason:"SYNTAX_DOTS"};
+  if(!/^[a-z0-9.-]+$/.test(domain)) return {ok:false,value:s,reason:"SYNTAX_DOMAIN_CHARS"};
+  if(domain.startsWith(".")||domain.endsWith(".")||domain.includes("..")
+     ||domain.startsWith("-")||domain.endsWith("-")) return {ok:false,value:s,reason:"SYNTAX_DOTS"};
+
+  const parts = domain.split(".");
+  if(parts.length<2) return {ok:false, value:s, reason:"SYNTAX_NO_TLD"};
+  const tld = parts[parts.length-1];
+  if(!/^[a-z]{2,}$/.test(tld)) return {ok:false, value:s, reason:"SYNTAX_TLD"};   // kills .c and .123
+
+  if(DISPOSABLE.some(d=>domain.includes(d))) return {ok:false, value:s, reason:"DISPOSABLE"};
+
+  // likely typo: one edit away from a domain we know, but not that domain
+  for(const known of KNOWN_DOMAINS){
+    if(domain!==known && Math.abs(domain.length-known.length)<=2 && editDistance(domain,known)===1){
+      return {ok:false, value:s, reason:"TYPO_SUSPECT",
+              suggestion: local+"@"+known};
+    }
+  }
+
+  const email = local+"@"+domain;
+  return {ok:true, value:email, reason: multi?"MULTI_TAKEN_FIRST":"",
+          role: ROLE_LOCALS.has(local.toLowerCase())};
+}
+
+/* House UAE normalisation, then a structural check.
+   Returns {ok, value, kind:"mobile"|"landline"|"", reason, recovered} */
+function validatePhone(raw){
+  if(raw===null||raw===undefined||raw==="") return {ok:false,value:"",kind:"",reason:"EMPTY"};
+
+  // Excel often stores a phone as a number, which loses the leading zero.
+  let s = (typeof raw === "number")
+        ? (Number.isInteger(raw) ? raw.toFixed(0) : String(raw))
+        : String(raw).trim();
+  if(!s) return {ok:false,value:"",kind:"",reason:"EMPTY"};
+
+  const hadPlus = s.trim().startsWith("+");
+  let d = s.replace(/[^0-9]/g,"");
+  if(!d) return {ok:false,value:s,kind:"",reason:"NO_DIGITS"};
+
+  // strip local / international prefixes — the AGN house rule
+  const before = d;
+  d = d.replace(/^(?:00971|0971|971|00|0)/,"");
+  const recovered = (!hadPlus && before.length===9 && before[0]==="5"); // lost leading zero
+
+  // placeholders such as 0000000000, 0555555555, 0501111111 — a real list does not
+  // contain a number whose whole subscriber part is one repeated digit
+  if(/^(\d)\1+$/.test(d) || /^(\d)\1{6,}$/.test(d.slice(-7)))
+    return {ok:false,value:s,kind:"",reason:"REPEATED_DIGITS"};
+
+  if(d.length===9 && d[0]==="5"){
+    if(!MOBILE_SECOND.has(d[1])) return {ok:false,value:s,kind:"",reason:"BAD_MOBILE_PREFIX"};
+    return {ok:true, value:"+971"+d, kind:"mobile", reason: recovered?"LOST_LEADING_ZERO":"", recovered};
+  }
+  if(d.length===8 && LANDLINE_AREA.has(d[0])){
+    return {ok:true, value:"+971"+d, kind:"landline", reason:"LANDLINE"};
+  }
+  return {ok:false, value:s, kind:"",
+          reason: d.length<8 ? "TOO_SHORT" : d.length>9 ? "TOO_LONG" : "NOT_UAE_FORMAT"};
+}
+
+/* ========================= file reading ================================== */
+
+/* A CSV parser that handles quoted fields, so we work with no network too. */
+function parseCSV(text){
+  const rows=[]; let row=[], cell="", q=false;
+  text = text.replace(/^﻿/,"");
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){
+      if(c==='"'){ if(text[i+1]==='"'){cell+='"';i++;} else q=false; }
+      else cell+=c;
+    } else if(c==='"'){ q=true; }
+    else if(c===","){ row.push(cell); cell=""; }
+    else if(c==="\n"){ row.push(cell); rows.push(row); row=[]; cell=""; }
+    else if(c!=="\r"){ cell+=c; }
+  }
+  if(cell!==""||row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r=>r.some(v=>String(v).trim()!==""));
+}
+
+function readFile(file){
+  return new Promise((resolve,reject)=>{
+    const fr=new FileReader();
+    fr.onerror=()=>reject(new Error("Could not read the file."));
+    if(/\.csv$/i.test(file.name)){
+      fr.onload=e=>{ try{ resolve(parseCSV(e.target.result)); }catch(err){ reject(err); } };
+      fr.readAsText(file);
+    } else {
+      fr.onload=e=>{
+        try{
+          if(typeof XLSX==="undefined")
+            throw new Error("The Excel parser did not load — check your connection, or save the file as .csv.");
+          const wb = XLSX.read(new Uint8Array(e.target.result), {type:"array"});
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          // raw:true keeps numbers as numbers, so we can spot a lost leading zero
+          resolve(XLSX.utils.sheet_to_json(ws,{header:1, raw:true, defval:""})
+                       .filter(r=>r.some(v=>String(v).trim()!=="")));
+        }catch(err){ reject(err); }
+      };
+      fr.readAsArrayBuffer(file);
+    }
+  });
+}
+
+
+/* ========================= state & wiring ================================ */
+
+let headers=[], dataRows=[], results=[], counts=null, fileName="";
+const $ = id => document.getElementById(id);
+
+/* section 2 */
+Object.keys(INDUSTRY_FLOWS).forEach(k=>
+  $("industry").insertAdjacentHTML("beforeend",`<option>${k}</option>`));
+$("industry").addEventListener("change", e=>{
+  const flows=INDUSTRY_FLOWS[e.target.value], sel=$("flow");
+  if(!flows){ sel.disabled=true; sel.innerHTML="<option>Select industry first</option>"; return; }
+  sel.disabled=false;
+  sel.innerHTML=flows.map(f=>`<option>${f}</option>`).join("");
+});
+
+/* section 1 */
+const drop=$("drop");
+drop.addEventListener("click",()=>$("file").click());
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop",e=>{ const f=e.dataTransfer.files[0]; if(f) handleFile(f); });
+$("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(f) handleFile(f); });
+$("reset").addEventListener("click",resetAll);
+$("cols").addEventListener("click",()=>$("mapping").classList.toggle("hide"));
+$("colEmail").addEventListener("change",run);
+$("colPhone").addEventListener("change",run);
+
+function resetAll(){
+  headers=[];dataRows=[];results=[];counts=null;fileName="";
+  drop.classList.remove("hide"); $("chip").style.display="none";
+  $("mapping").classList.add("hide"); $("prog").style.display="none";
+  $("review").style.display="none"; $("fix").style.display="none";
+  $("foot").classList.add("hide"); $("file").value="";
+  ["Email","Phone","Both"].forEach(k=>{
+    $("n"+k).textContent="—"; $("d"+k).textContent=""; $("b"+k).style.width="0";
+  });
+}
+
+function guessCol(hdrs,patterns){
+  for(const p of patterns){
+    const i=hdrs.findIndex(h=>p.test(String(h).trim()));
+    if(i>=0) return i;
+  }
+  return -1;
+}
+
+async function handleFile(file){
+  let rows;
+  try{ rows=await readFile(file); }
+  catch(err){ alertInline(err.message); return; }
+  if(!rows.length){ alertInline("That file has no rows."); return; }
+
+  headers=rows[0].map(h=>String(h).trim());
+  dataRows=rows.slice(1);
+  let truncated=false;
+  if(dataRows.length>MAX_ROWS){ dataRows=dataRows.slice(0,MAX_ROWS); truncated=true; }
+
+  fileName=file.name;
+  drop.classList.add("hide");
+  $("chip").style.display="flex";
+  $("chipName").textContent=file.name;
+  $("chipCount").textContent=dataRows.length.toLocaleString()+" rows"+
+    (truncated?` (first ${MAX_ROWS.toLocaleString()} only)`:"");
+
+  const opts=headers.map((h,i)=>`<option value="${i}">${h||"Column "+(i+1)}</option>`).join("");
+  $("colEmail").innerHTML=opts; $("colPhone").innerHTML=opts;
+  const ge=guessCol(headers,[/^e-?mail/i,/e-?mail/i,/^mail$/i]);
+  const gp=guessCol(headers,[/^(mobile|phone)/i,/whats ?app/i,/mobile|phone|tel|cell|contact ?(no|number)/i]);
+  $("colEmail").value = ge>=0?ge:0;
+  $("colPhone").value = gp>=0?gp:(headers.length>1?1:0);
+
+  run();
+}
+
+function alertInline(msg){
+  drop.innerHTML=`<div class="t">Could not read that file</div><div class="h">${esc(msg)}</div>`;
+}
+
+/* ========================= the validation pass =========================== */
+/* Chunked in 500s so the bar moves and the tab stays responsive — the same
+   shape a server-side batch job would take, just without the queue. */
+function run(){
+  if(!dataRows.length) return;
+  const ei=+$("colEmail").value, pi=+$("colPhone").value;
+  results=[]; counts={email:0,phone:0,both:0,neither:0,dupEmail:0,dupPhone:0,
+                      role:0,landline:0,recovered:0,typos:0};
+
+  /* Dedupe PER CHANNEL. A repeated phone must not discard a unique email:
+     whole offices share one landline, and killing the row would throw away
+     every good address behind it. Keys are lowercased — Sara@x.com and
+     sara@x.com are one mailbox. Landlines never enter the phone key set,
+     since they are not a routing channel at all. */
+  const seenEmail=new Set(), seenPhone=new Set();
+
+  $("prog").style.display="block";
+  const bar=document.querySelector("#prog .bar>i");
+  const total=dataRows.length, CHUNK=500;
+  let i=0;
+
+  (function step(){
+    const end=Math.min(i+CHUNK,total);
+    for(; i<end; i++){
+      const r=dataRows[i];
+      const em=validateEmail(r[ei]), ph=validatePhone(r[pi]);
+
+      const eKey = em.ok ? em.value.toLowerCase() : "";
+      const pKey = (ph.ok && ph.kind==="mobile") ? ph.value : "";
+
+      const dupEmail = !!eKey && seenEmail.has(eKey);
+      const dupPhone = !!pKey && seenPhone.has(pKey);
+      if(eKey) seenEmail.add(eKey);
+      if(pKey) seenPhone.add(pKey);
+
+      // a landline is a valid number but carries no WhatsApp, so it never
+      // qualifies a contact for the phone channel
+      const emailOK = em.ok && !dupEmail;
+      const phoneOK = ph.ok && ph.kind==="mobile" && !dupPhone;
+
+      const bucket = emailOK&&phoneOK ? "both" : emailOK ? "email"
+                   : phoneOK ? "phone" : "neither";
+      counts[bucket]++;
+      if(dupEmail) counts.dupEmail++;
+      if(dupPhone) counts.dupPhone++;
+      if(em.role) counts.role++;
+      if(ph.kind==="landline") counts.landline++;
+      if(ph.recovered) counts.recovered++;
+      if(em.suggestion) counts.typos++;
+
+      results.push({row:i+2, bucket, email:em, phone:ph, dupEmail, dupPhone, ei});
+    }
+    bar.style.width=(total?100*i/total:100)+"%";
+    if(i<total) requestAnimationFrame(step); else finish(total);
+  })();
+}
+
+/* count up, so the numbers land rather than blink into place */
+function countTo(el, to){
+  const from = 0, t0 = performance.now(), dur = 550;
+  (function tick(now){
+    const p = Math.min(1,(now-t0)/dur), e = 1-Math.pow(1-p,3);
+    el.textContent = Math.round(from+(to-from)*e).toLocaleString();
+    if(p<1) requestAnimationFrame(tick);
+  })(t0);
+}
+
+function finish(total){
+  setTimeout(()=>{ $("prog").style.display="none"; }, 250);
+  const den="/"+total.toLocaleString();
+  [["Email",counts.email],["Phone",counts.phone],["Both",counts.both]].forEach(([k,v])=>{
+    countTo($("n"+k), v);
+    $("d"+k).textContent=den;
+    $("b"+k).style.width=(total? 100*v/total : 0)+"%";
+  });
+
+  const routable=counts.email+counts.phone+counts.both;
+  const skipped=counts.neither;
+  const f=$("foot"); f.classList.remove("hide");
+  f.innerHTML =
+    `<span><b>${routable.toLocaleString()}</b> of <b>${total.toLocaleString()}</b> ready to send</span>`+
+    (skipped?`<span>·</span><button class="link" id="toggleReview">${skipped.toLocaleString()} skipped</button>`:"")+
+    `<span style="margin-left:auto"></span>`+
+    `<button id="dlRouted">Export</button>`;
+  if(skipped) $("toggleReview").addEventListener("click",toggleReview);
+  $("dlRouted").addEventListener("click",exportRouted);
+
+  /* the only nudge worth interrupting for: domains we can repair */
+  const typos=results.filter(r=>r.email.suggestion);
+  const fx=$("fix");
+  if(typos.length){
+    fx.style.display="flex";
+    fx.innerHTML=`<span><b>${typos.length}</b> email${typos.length>1?"s look":" looks"} mistyped `+
+      `— e.g. ${esc(typos[0].email.value)} → <b>${esc(typos[0].email.suggestion)}</b></span>`+
+      `<button class="primary" id="applyTypos" style="margin-left:auto">Fix all</button>`;
+    $("applyTypos").addEventListener("click",()=>{
+      typos.forEach(r=>{ dataRows[r.row-2][r.ei]=r.email.suggestion; });
+      run();
+    });
+  } else fx.style.display="none";
+
+  if($("review").style.display==="block") renderReview();
+}
+
+/* ========================= review ======================================== */
+
+/* plain English, not reason codes — nobody should have to decode EMAIL_SYNTAX_TLD */
+function whySkipped(r){
+  if(r.dupEmail) return "Duplicate email";
+  if(r.dupPhone) return "Duplicate phone";
+  const e=r.email, p=r.phone;
+  const noE = !e.ok && e.reason==="EMPTY", noP = !p.ok && p.reason==="EMPTY";
+  if(noE && noP) return "No email or phone";
+  const bits=[];
+  if(!e.ok && !noE) bits.push(e.reason==="TYPO_SUSPECT" ? "Misspelt email domain"
+                            : e.reason==="DISPOSABLE"   ? "Throwaway email"
+                            : e.reason==="PLACEHOLDER"  ? "Placeholder email"
+                            : "Invalid email");
+  else if(noE) bits.push("No email");
+  if(p.ok && p.kind==="landline") bits.push("Landline — no WhatsApp");
+  else if(!p.ok && !noP) bits.push("Not a UAE mobile");
+  else if(noP) bits.push("No phone");
+  return bits.join(" · ");
+}
+
+function toggleReview(){
+  const r=$("review");
+  const open = r.style.display==="block";
+  r.style.display = open ? "none" : "block";
+  if(!open) renderReview();
+}
+
+function renderReview(){
+  const bad=results.filter(r=>r.bucket==="neither"||r.dupEmail||r.dupPhone);
+  $("tbl").querySelector("tbody").innerHTML = bad.slice(0,100).map(r=>
+    `<tr><td>${r.row}</td><td>${esc(r.email.value)||"—"}</td>`+
+    `<td>${esc(r.phone.value)||"—"}</td><td class="why">${whySkipped(r)}</td></tr>`
+  ).join("") || `<tr><td colspan="4" class="why">Nothing skipped.</td></tr>`;
+  $("reviewFoot").innerHTML =
+    (bad.length>100 ? `<span>Showing 100 of ${bad.length.toLocaleString()}</span>` : "")+
+    `<span style="margin-left:auto"></span><button id="dlSkipped">Export skipped</button>`;
+  $("dlSkipped").addEventListener("click",exportSkipped);
+}
+
+/* ========================= export ======================================== */
+
+const esc = s => String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const csvCell = v => `"${String(v??"").replace(/"/g,'""')}"`;
+
+function download(name, rows){
+  const csv=rows.map(r=>r.map(csvCell).join(",")).join("\r\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8"}));
+  a.download=name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+function exportRouted(){
+  const ind=$("industry").value, flow=$("flow").disabled?"":$("flow").value;
+  const out=[["Row","Channel","Email","Mobile","Role account","Industry","Email flow"]];
+  results.filter(r=>r.bucket!=="neither").forEach(r=>out.push([
+    r.row, r.bucket,
+    r.bucket==="phone" ? "" : r.email.value,
+    r.bucket==="email" ? "" : r.phone.value,
+    r.email.role?"yes":"", ind, flow
+  ]));
+  download("outreach-routed.csv", out);
+}
+
+function exportSkipped(){
+  const out=[["Row","Email as given","Phone as given","Why skipped"]];
+  results.filter(r=>r.bucket==="neither"||r.dupEmail||r.dupPhone).forEach(r=>out.push([
+    r.row, r.email.value, r.phone.value, whySkipped(r)
+  ]));
+  download("outreach-skipped.csv", out);
+}
+</script>
+</body>
+</html>
