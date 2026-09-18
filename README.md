@@ -11,9 +11,20 @@ Validation alone works by opening `public/index.html` directly — no server nee
 The CRM import needs the serverless functions, so it needs `vercel dev` locally or a
 Vercel deployment.
 
+## Testing
+
+    ZOHO_TOKEN_CACHE=1 ALLOW_CLEANUP=1 npx vercel dev   # in one terminal
+    npm test                                            # in another
+
+23 unit checks run with no CRM. 14 live fixtures then import into the CRM and
+read the records back to confirm they arrived correctly — an API answering
+"success" is not evidence the data is right. Everything created is deleted
+afterwards by id; set `KEEP=1` to leave it for inspection.
+
 ## Layout
 
-    public/index.html   the whole front end: parsing, validation, slicing, import UI
+    public/index.html   the front end: upload, slicing, mapping and import UI
+    public/engine.js    validation, parsing and record building — shared with the tests
     api/_zoho.js        token handling and the CRM request wrapper
     api/fields.js       live module + field schemas, fetched fresh every call
     api/tags.js         creates a tag on a module if it does not already exist

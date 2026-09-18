@@ -31,7 +31,10 @@ export default handler(async (req) => {
 
   for(let i=0; i<wanted.length; i+=CHUNK){
     const chunk = wanted.slice(i, i+CHUNK);
-    const list = chunk.map(v => `'${String(v).replace(/'/g,"\\'")}'`).join(",");
+    /* COQL escapes a quote by doubling it. A backslash is a syntax error, not
+       an escape — verified against the live API, and o'brien@… is a real
+       address shape, so this is not hypothetical. */
+    const list = chunk.map(v => `'${String(v).replace(/'/g,"''")}'`).join(",");
     const q = `select ${cols} from ${module} where ${field} in (${list}) limit ${CHUNK*2}`;
 
     const res = await crm("/coql", { method:"POST", body:{ select_query:q } });
