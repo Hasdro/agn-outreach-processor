@@ -400,6 +400,9 @@ async function handleFile(file){
   $("colEmail").value = ge>=0?ge:0;
   $("colPhone").value = gp>=0?gp:(headers.length>1?1:0);
 
+  /* the headers are known only now, so column pairings can finally be guessed */
+  if(crmFields.length && !mappingTouched) seedMappings();
+
   run();
 }
 
@@ -628,7 +631,7 @@ function downloadSlice(key, rows){
    session — an admin can add a field or make one mandatory at any time, and an
    import built against yesterday's schema fails confusingly. */
 
-let crmFields = [], crmMandatory = [], mappings = [];
+let crmFields = [], crmMandatory = [], mappings = [], mappingTouched = false;
 
 /* The engine is pure: the page owns the state and hands it over.
    These names must NOT match the engine's own — engine.js is a classic script,
@@ -685,6 +688,11 @@ async function loadFields(module){
 
 /* Seed one sensible pairing so the common case needs no work, while leaving
    every one of them visible and changeable. */
+/* Seeded on module load AND again when a file arrives.
+   Column pairings need the spreadsheet headers, which do not exist until a file
+   is dropped — seeding only on module load silently lost every column-based
+   pairing, Company among them, and the records imported without it. Re-seeding
+   is skipped once the user has edited the table, so their work is never undone. */
 function seedMappings(){
   mappings = [];
   const has = n => crmFields.some(f => f.api_name === n);
@@ -766,6 +774,7 @@ function renderMapping(){
   box.querySelectorAll("[data-r]").forEach(el => {
     const i = +el.dataset.i, role = el.dataset.r;
     el.addEventListener("change", () => {
+      mappingTouched = true;
       const m = mappings[i];
       if(role === "field"){
         m.field = el.value;
@@ -790,7 +799,7 @@ function renderMapping(){
     if(role === "static" && el.tagName === "INPUT")
       el.addEventListener("input", () => { mappings[i].value = el.value; validateMapping(); });
     if(role === "del")
-      el.addEventListener("click", () => { mappings.splice(i,1); renderMapping(); });
+      el.addEventListener("click", () => { mappingTouched = true; mappings.splice(i,1); renderMapping(); });
   });
 
   validateMapping();
@@ -828,8 +837,9 @@ function validateMapping(){
   return ok;
 }
 
-$("dest").addEventListener("change", e => loadFields(e.target.value));
+$("dest").addEventListener("change", e => { mappingTouched = false; loadFields(e.target.value); });
 $("addMap").addEventListener("click", () => {
+  mappingTouched = true;
   mappings.push({ field:"", type:"", key:null });
   renderMapping();
 });
