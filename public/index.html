@@ -621,15 +621,17 @@ function downloadSlice(key, rows){
 
 let crmFields = [], crmMandatory = [], mappings = [];
 
-/* the engine is pure; the page owns the state and hands it over */
+/* The engine is pure: the page owns the state and hands it over.
+   These names must NOT match the engine's own — engine.js is a classic script,
+   so its declarations are globals, and redeclaring one is a SyntaxError that
+   takes the whole inline script down with it. */
+let buildNotes = [];
 const ctx = () => ({ headers, dataRows, mappings, mandatory: crmMandatory,
                      fieldMeta: Object.fromEntries(
                        crmFields.map(f => [f.api_name, { length:f.length, type:f.type }])),
                      notes: buildNotes });
-let buildNotes = [];
-const buildRecord = r => Engine.buildRecord(r, ctx());
-const splitName   = r => Engine.splitName(r, ctx());
-const COMPUTED    = Engine.COMPUTED;
+const toRecord  = r => Engine.buildRecord(r, ctx());
+const nameParts = r => Engine.splitName(r, ctx());
 
 
 
@@ -704,7 +706,7 @@ function sourceOptions(m){
   const opt = (v,l,sel) => `<option value="${v}"${sel?" selected":""}>${esc(l)}</option>`;
   let h = opt("", "— choose —", !m.type);
   h += `<optgroup label="Validated">`;
-  for(const [k,c] of Object.entries(COMPUTED))
+  for(const [k,c] of Object.entries(Engine.COMPUTED))
     h += opt("computed:"+k, c.label, m.type==="computed" && m.key===k);
   h += `</optgroup><optgroup label="Spreadsheet column">`;
   headers.forEach((hd,i) =>
@@ -984,7 +986,7 @@ async function startImport(){
         if(cancelled){ logLine("Stopped by user.", "err"); break; }
 
         const rowSlice = g.rows.slice(i, i+BATCH);
-        const slice    = rowSlice.map(buildRecord);
+        const slice    = rowSlice.map(toRecord);
         const n = Math.floor(i/BATCH)+1, of = Math.ceil(g.rows.length/BATCH);
 
         /* the account each existing contact sits on today, so the server can
@@ -1122,7 +1124,7 @@ function renderImportSlices(){
 async function sendSplit(rows, dest, tag, g, field, currentAccounts){
   await Engine.sendInHalves(rows,
     slice => api("/api/import", {
-      module: dest, records: slice.map(buildRecord), tag: tag || undefined,
+      module: dest, records: slice.map(toRecord), tag: tag || undefined,
       mode: g.mode,
       duplicateCheck: g.mode === "upsert" && field ? [field] : [],
       accountLinking: dest === "Contacts" ? "create" : "none",
@@ -1152,7 +1154,7 @@ async function retryAsUpdates(){
     const rowSlice = rows.slice(i, i+BATCH);
     try{
       const out = await api("/api/import", {
-        module: dest, records: rowSlice.map(buildRecord), tag: tag || undefined,
+        module: dest, records: rowSlice.map(toRecord), tag: tag || undefined,
         mode:"upsert", duplicateCheck:[field],
         accountLinking: dest === "Contacts" ? "create" : "none"
       });

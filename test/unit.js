@@ -70,7 +70,39 @@ async function halving(){
   is("halving: cost stays logarithmic", calls < 20, true);
 }
 
+/* engine.js is loaded by the page as a classic <script>, so everything it
+ * declares at the top level becomes a global. If the page declares the same
+ * name, the browser throws "Identifier has already been declared" and the
+ * ENTIRE inline script is skipped — the page loads looking normal and nothing
+ * works. Node cannot reproduce this (there, engine.js is a module), so it has
+ * to be checked structurally. This shipped once; it does not ship again. */
+function globalCollisions(){
+  const fs = require("fs"), path = require("path");
+  const read = f => fs.readFileSync(path.join(__dirname,"..","public",f),"utf8");
+  const page = read("index.html").split("<script>").pop().split("</script>")[0];
+
+  const topLevel = src => {
+    const names = new Set(); let depth = 0;
+    for(const line of src.split("\n")){
+      const t = line.trim();
+      if(depth === 0){
+        let m = t.match(/^(?:const|let|var)\s+([A-Za-z_$][\w$]*)/);
+        if(m) names.add(m[1]);
+        m = t.match(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/);
+        if(m) names.add(m[1]);
+      }
+      depth = Math.max(0, depth + (line.split("{").length-1) - (line.split("}").length-1));
+    }
+    return names;
+  };
+
+  const eng = topLevel(read("engine.js")), pg = topLevel(page);
+  const clash = [...eng].filter(n => pg.has(n));
+  is("no global name collides between engine.js and the page", clash, []);
+}
+
 module.exports = async function runUnit(){
+  globalCollisions();
   await halving();
   const failed = checks.filter(c => !c.ok);
   checks.forEach(c => {
