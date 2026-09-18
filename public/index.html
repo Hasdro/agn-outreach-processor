@@ -457,17 +457,26 @@ function run(){
       results.push({row:i+2, bucket, email:em, phone:ph, dupEmail, dupPhone, ei});
     }
     bar.style.width=(total?100*i/total:100)+"%";
-    if(i<total) requestAnimationFrame(step); else finish(total);
+    if(i>=total){ finish(total); return; }
+    /* requestAnimationFrame does not fire in a hidden tab. Yielding to it would
+       stall the parse the moment the user switches away — on a 10,000 row file
+       they would come back to a frozen bar. There is nothing to paint while
+       hidden, so finish the work instead of waiting for a frame that is not
+       coming. */
+    if(document.hidden){ step(); } else { requestAnimationFrame(step); }
   })();
 }
 
 /* count up, so the numbers land rather than blink into place */
 function countTo(el, to){
+  /* An animation is a nicety; the number is not. With no frames coming the
+     tile would sit at 0 and quietly misreport the result. */
+  if(document.hidden){ el.textContent = to.toLocaleString(); return; }
   const from = 0, t0 = performance.now(), dur = 550;
   (function tick(now){
     const p = Math.min(1,(now-t0)/dur), e = 1-Math.pow(1-p,3);
     el.textContent = Math.round(from+(to-from)*e).toLocaleString();
-    if(p<1) requestAnimationFrame(tick);
+    if(p<1) requestAnimationFrame(tick); else el.textContent = to.toLocaleString();
   })(t0);
 }
 
