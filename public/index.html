@@ -944,11 +944,14 @@ async function detectIndustry(){
   note.textContent = "Detecting industry…";
   try{
     const d = await api("/api/industry", { companies, domains });
+    if(flowTouched){ note.textContent = ""; return; }   // chosen while we waited
     if(!d.ok){
-      note.textContent = d.reason === "not_configured" ? "" : "Could not detect the industry — pick one.";
+      note.textContent =
+        d.reason === "not_configured" ? "" :
+        d.reason === "no_signal"      ? "No company names or business email domains to judge by."
+                                      : "Could not detect the industry — pick one.";
       return;
     }
-    if(flowTouched) return;                     // the user chose while we waited
     $("flow").value = d.industry;
     const sure = { high:"", medium:" (worth a check)", low:" (low confidence — worth a check)" }[d.confidence] || "";
     note.innerHTML = `Detected <b>${esc(d.industry)}</b>${esc(sure)} from `+
@@ -956,7 +959,7 @@ async function detectIndustry(){
       `${d.judgedOn.domains?` and ${d.judgedOn.domains} domain${d.judgedOn.domains===1?"":"s"}`:""}. `+
       `Change it if that is wrong.`;
   }catch(err){
-    note.textContent = "Could not detect the industry — pick one.";
+    note.textContent = flowTouched ? "" : "Could not detect the industry — pick one.";
   }
 }
 
