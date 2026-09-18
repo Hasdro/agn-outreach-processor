@@ -147,7 +147,9 @@
 
   .flowrow{display:flex;align-items:center;gap:12px;margin-bottom:18px}
   .flowrow label{margin:0;white-space:nowrap}
-  .flowrow select{max-width:340px;flex:1}
+  .flowrow select{max-width:300px}
+  #flowNote{flex:1;min-width:0}
+  #flowNote b{color:var(--ink)}
   .hide{display:none!important}
 </style>
 </head>
@@ -190,6 +192,7 @@
     <div class="flowrow">
       <label class="fl" for="flow">Email flow</label>
       <select id="flow"></select>
+      <span class="hint" id="flowNote"></span>
     </div>
     <div class="tiles">
       <div class="tile t-email">
@@ -392,6 +395,7 @@ async function handleFile(file){
 
   /* the headers are known only now, so column pairings can finally be guessed */
   if(crmFields.length && !mappingTouched) seedMappings();
+  flowTouched = false;   // a different file may well be a different industry
 
   run();
 }
@@ -502,6 +506,7 @@ function finish(total){
 
   renderSlices();
   if($("review").style.display==="block") renderReview();
+  detectIndustry();
 }
 
 /* ========================= review ======================================== */
@@ -907,6 +912,52 @@ function paintPreflight(){
     `They will be ${verb}.`+
     `<div class="sub"><b>${fresh.length.toLocaleString()}</b> new record`+
     `${fresh.length===1?"":"s"} will be created.</div>`;
+}
+
+/* ========================= industry detection ============================ */
+/* The flow a list enters follows the industry it targets, and a list normally
+   targets one. Rather than make the user work that out and pick it, the company
+   names and business email domains are handed to the Gemini standalone in the
+   AGN CRM org, which answers with one of this dropdown's own options.
+   It is a suggestion: the field stays editable, and a failure never blocks
+   anything — the dropdown simply stays as the user left it. */
+
+let flowTouched = false;
+$("flow").addEventListener("change", () => { flowTouched = true; });
+
+async function detectIndustry(){
+  if(flowTouched) return;                       // never overwrite a human choice
+  const note = $("flowNote");
+
+  /* Only what identifies an industry leaves the machine: company names and
+     business email domains. No personal names, addresses or numbers. */
+  const ci = headers.findIndex(h => /company|organi[sz]ation|account|employer|business/i.test(String(h).trim()));
+  const companies = ci >= 0
+    ? dataRows.map(r => String(r[ci] ?? "").trim()).filter(Boolean)
+    : [];
+  const domains = results
+    .filter(r => r.email.ok)
+    .map(r => r.email.value.split("@")[1]);
+
+  if(!companies.length && !domains.length){ note.textContent = ""; return; }
+
+  note.textContent = "Detecting industry…";
+  try{
+    const d = await api("/api/industry", { companies, domains });
+    if(!d.ok){
+      note.textContent = d.reason === "not_configured" ? "" : "Could not detect the industry — pick one.";
+      return;
+    }
+    if(flowTouched) return;                     // the user chose while we waited
+    $("flow").value = d.industry;
+    const sure = { high:"", medium:" (worth a check)", low:" (low confidence — worth a check)" }[d.confidence] || "";
+    note.innerHTML = `Detected <b>${esc(d.industry)}</b>${esc(sure)} from `+
+      `${d.judgedOn.companies} company name${d.judgedOn.companies===1?"":"s"}`+
+      `${d.judgedOn.domains?` and ${d.judgedOn.domains} domain${d.judgedOn.domains===1?"":"s"}`:""}. `+
+      `Change it if that is wrong.`;
+  }catch(err){
+    note.textContent = "Could not detect the industry — pick one.";
+  }
 }
 
 /* ========================= CRM import ==================================== */
