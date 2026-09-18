@@ -119,6 +119,24 @@
        font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .log div{padding:1px 0;color:var(--muted)}
   .log div.ok{color:var(--green)} .log div.err{color:var(--red)} .log div.hd{color:var(--ink)}
+
+  .maphead{display:grid;grid-template-columns:1fr 1fr 34px;gap:10px;margin:20px 0 8px;
+           font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--muted)}
+  .maprow{display:grid;grid-template-columns:1fr 1fr 34px;gap:10px;margin-bottom:8px;
+          align-items:center}
+  .maprow .two{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}
+  .maprow select,.maprow input{padding:9px 11px;font-size:13.5px;min-width:0}
+  .maprow .x{border:1px solid var(--line);border-radius:9px;padding:0;height:34px;
+             color:var(--muted);font-size:17px;line-height:1}
+  .maprow .x:hover{border-color:var(--red);color:var(--red)}
+  .maprow.req select:first-child{border-color:var(--edge);background:var(--tint)}
+  .block{border:1px solid var(--red);color:var(--red);border-radius:10px;padding:11px 13px;
+         font-size:13.5px;margin-top:14px}
+  @media(max-width:680px){
+    .maphead{display:none}
+    .maprow{grid-template-columns:1fr 1fr 34px}
+  }
   .hide{display:none!important}
 </style>
 </head>
@@ -215,25 +233,36 @@
     </div>
   </div>
 
-  <div class="card" id="importCard">
-    <div class="step">4 — Import to Zoho CRM</div>
+  <div class="card" id="mapCard">
+    <div class="step">4 — Map to Zoho CRM</div>
 
     <div class="grid2">
       <div><label class="fl">Create as</label>
-        <select id="dest">
-          <option value="Leads">Leads</option>
-          <option value="Contacts">Contacts + Accounts</option>
-        </select></div>
-      <div><label class="fl">Tag <span class="hint">— applied to every record, so the batch stays findable</span></label>
+        <select id="dest"><option value="">Loading modules…</option></select></div>
+      <div><label class="fl">Tag <span class="hint">— created if new, applied to every record</span></label>
         <input id="tag" type="text" placeholder="e.g. outreach-2026-09" maxlength="25"></div>
     </div>
 
-    <div class="actions">
+    <div id="mapBox" class="hide">
+      <div class="maphead">
+        <span>Zoho field</span><span>Value from</span><span></span>
+      </div>
+      <div id="mapRows"></div>
+      <div class="actions">
+        <button id="addMap">+ Add mapping</button>
+        <span class="hint" id="mapHint"></span>
+      </div>
+      <div id="mapBlock" class="block hide"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">5 — Import</div>
+    <div class="actions" style="margin-top:0">
       <button class="primary" id="startImport">Import contacts</button>
       <button id="cancelImport" class="hide">Stop</button>
       <span class="hint" id="importHint"></span>
     </div>
-
     <div id="impProg" class="hide">
       <div class="bar"><i id="impBar"></i></div>
       <div class="foot" id="impStats"></div>
@@ -712,6 +741,255 @@ function downloadSlice(key, rows){
   download(`outreach-${key}.csv`, out);
 }
 
+/* ========================= field mapping ================================= */
+/* CSV headers never match CRM api names, so nothing is imported until every
+   mandatory CRM field has a source. Fields are fetched live per module, per
+   session — an admin can add a field or make one mandatory at any time, and an
+   import built against yesterday's schema fails confusingly. */
+
+let crmFields = [], crmMandatory = [], mappings = [];
+
+/* Values derived from validation rather than taken from a column. Offering
+   these explicitly beats guessing inside the importer: the user can see that
+   Email is the cleaned address and not the raw cell. */
+const COMPUTED = {
+  email_clean:  { label:"Email (validated)",    get:r => r.email.ok ? r.email.value : "" },
+  mobile_clean: { label:"Mobile (normalised)",  get:r => (r.phone.ok && r.phone.kind==="mobile")  ? r.phone.value : "" },
+  phone_clean:  { label:"Landline (normalised)",get:r => (r.phone.ok && r.phone.kind==="landline")? r.phone.value : "" },
+  first_derived:{ label:"First name (from name column)", get:r => splitName(r).first },
+  last_derived: { label:"Last name (from name column)",  get:r => splitName(r).last  },
+  channel:      { label:"Channel (email/phone/both)",    get:r => r.bucket }
+};
+
+/* A single "Name" column is the common case; Last_Name is mandatory in every
+   module we import to, so there has to be a fallback that never yields "". */
+function splitName(r){
+  const orig = dataRows[r.row-2] || [];
+  const cell = pats => {
+    const i = headers.findIndex(h => pats.test(String(h).trim()));
+    return i>=0 ? String(orig[i] ?? "").trim() : "";
+  };
+  let first = cell(/^first|given/i), last = cell(/^last|surname|family/i);
+  if(!last){
+    const full = cell(/^(full[\s_-]*)?name$|^contact[\s_-]*name/i);
+    if(full){ const b = full.split(/\s+/); last = b.pop(); first = first || b.join(" "); }
+  }
+  if(!last) last = r.email.ok ? r.email.value.split("@")[0] : "Unknown";
+  return { first, last };
+}
+
+async function loadModules(){
+  try{
+    const d = await apiGet("/api/fields");
+    if(!d.configured){
+      $("dest").innerHTML = `<option value="">Not configured</option>`;
+      $("mapHint").textContent =
+        `Set ${d.missing.join(", ")} in the Vercel dashboard to enable importing.`;
+      return;
+    }
+    $("dest").innerHTML = d.modules.map(m =>
+      `<option value="${m.api_name}">${m.api_name==="Contacts"?"Contacts + Companies":m.label}</option>`
+    ).join("");
+    await loadFields($("dest").value);
+  }catch(err){
+    $("dest").innerHTML = `<option value="">Unavailable</option>`;
+    $("mapHint").textContent = `Could not reach the CRM: ${err.message}`;
+  }
+}
+
+async function loadFields(module){
+  if(!module) return;
+  $("mapHint").textContent = "Loading fields…";
+  try{
+    const d = await apiGet(`/api/fields?module=${encodeURIComponent(module)}`);
+    crmFields = d.fields; crmMandatory = d.mandatory;
+    seedMappings();
+    $("mapBox").classList.remove("hide");
+    $("mapHint").textContent = `${crmFields.length} fields available in ${module}.`;
+  }catch(err){
+    $("mapHint").textContent = `Could not load ${module} fields: ${err.message}`;
+  }
+}
+
+/* Seed one sensible pairing so the common case needs no work, while leaving
+   every one of them visible and changeable. */
+function seedMappings(){
+  mappings = [];
+  const has = n => crmFields.some(f => f.api_name === n);
+  const col = pats => {
+    const i = headers.findIndex(h => pats.test(String(h).trim()));
+    return i>=0 ? i : null;
+  };
+  const add = (field, src) => { if(has(field)) mappings.push({ field, ...src }); };
+
+  add("Last_Name",  { type:"computed", key:"last_derived" });
+  add("First_Name", { type:"computed", key:"first_derived" });
+  add("Email",      { type:"computed", key:"email_clean" });
+  add("Mobile",     { type:"computed", key:"mobile_clean" });
+  add("Phone",      { type:"computed", key:"phone_clean" });
+
+  const c = col(/company|organi[sz]ation|account|employer/i);
+  if(c !== null){
+    if(has("Company"))      add("Company",      { type:"column", index:c });
+    else if(has("Account_Name")) add("Account_Name", { type:"column", index:c });
+  }
+  if(has("Account_Name") && !mappings.some(m=>m.field==="Account_Name") && c!==null)
+    add("Account_Name", { type:"column", index:c });
+
+  /* every mandatory field must appear, even with nothing chosen, so the gap
+     is visible rather than discovered at import time */
+  crmMandatory.forEach(f => {
+    if(!mappings.some(m => m.field === f)) mappings.push({ field:f, type:"", key:null });
+  });
+
+  renderMapping();
+}
+
+function sourceOptions(m){
+  const opt = (v,l,sel) => `<option value="${v}"${sel?" selected":""}>${esc(l)}</option>`;
+  let h = opt("", "— choose —", !m.type);
+  h += `<optgroup label="Validated">`;
+  for(const [k,c] of Object.entries(COMPUTED))
+    h += opt("computed:"+k, c.label, m.type==="computed" && m.key===k);
+  h += `</optgroup><optgroup label="Spreadsheet column">`;
+  headers.forEach((hd,i) =>
+    h += opt("column:"+i, hd || `Column ${i+1}`, m.type==="column" && m.index===i));
+  h += `</optgroup>`;
+  h += opt("static", "Fixed value…", m.type==="static");
+  return h;
+}
+
+function renderMapping(){
+  const box = $("mapRows");
+  box.innerHTML = mappings.map((m,idx) => {
+    const fld = crmFields.find(f => f.api_name === m.field);
+    const req = crmMandatory.includes(m.field);
+    const fieldSel = `<select data-i="${idx}" data-r="field">`+
+      `<option value="">— choose field —</option>`+
+      crmFields.filter(f => f.mappable || f.api_name===m.field)
+        .map(f => `<option value="${f.api_name}"${f.api_name===m.field?" selected":""}>`+
+          `${esc(f.label)}${f.mandatory?" *":""}</option>`).join("")+
+      `</select>`;
+
+    let valueCell;
+    if(m.type === "static"){
+      const opts = fld?.options?.length
+        ? `<select data-i="${idx}" data-r="static">`+
+          `<option value="">— pick —</option>`+
+          fld.options.map(o=>`<option${o===m.value?" selected":""}>${esc(o)}</option>`).join("")+
+          `</select>`
+        : `<input type="text" data-i="${idx}" data-r="static" value="${esc(m.value||"")}" `+
+          `placeholder="fixed value for every row">`;
+      valueCell = `<div class="two"><select data-i="${idx}" data-r="src" style="max-width:150px">`+
+        sourceOptions(m)+`</select>${opts}</div>`;
+    }else{
+      valueCell = `<select data-i="${idx}" data-r="src">${sourceOptions(m)}</select>`;
+    }
+
+    return `<div class="maprow${req?" req":""}">${fieldSel}${valueCell}`+
+      (req ? `<span></span>` : `<button class="x" data-i="${idx}" data-r="del" title="Remove">×</button>`)+
+      `</div>`;
+  }).join("");
+
+  box.querySelectorAll("[data-r]").forEach(el => {
+    const i = +el.dataset.i, role = el.dataset.r;
+    el.addEventListener("change", () => {
+      const m = mappings[i];
+      if(role === "field"){
+        m.field = el.value;
+        /* Zoho accepts and STORES an out-of-range picklist value rather than
+           rejecting it (verified live), so a stale static value carried over
+           from a previous field would silently pollute the picklist. Drop any
+           value the new field cannot actually hold. */
+        const nf = crmFields.find(f => f.api_name === el.value);
+        if(m.type === "static" && nf?.options?.length && !nf.options.includes(m.value))
+          m.value = "";
+      }
+      if(role === "static") m.value = el.value;
+      if(role === "src"){
+        const v = el.value;
+        if(!v)                       Object.assign(m, { type:"", key:null, index:null });
+        else if(v === "static")      Object.assign(m, { type:"static", value:m.value||"" });
+        else if(v.startsWith("computed:")) Object.assign(m, { type:"computed", key:v.slice(9) });
+        else                         Object.assign(m, { type:"column", index:+v.slice(7) });
+      }
+      renderMapping();
+    });
+    if(role === "static" && el.tagName === "INPUT")
+      el.addEventListener("input", () => { mappings[i].value = el.value; validateMapping(); });
+    if(role === "del")
+      el.addEventListener("click", () => { mappings.splice(i,1); renderMapping(); });
+  });
+
+  validateMapping();
+}
+
+/* The gate: no import while a mandatory field has no source. */
+function validateMapping(){
+  const filled = m => m.field && (
+      (m.type==="column" && m.index!=null) ||
+      (m.type==="computed" && m.key) ||
+      (m.type==="static" && String(m.value||"").trim() !== ""));
+
+  const missing = crmMandatory.filter(f =>
+    !mappings.some(m => m.field === f && filled(m)));
+
+  const dupes = mappings.map(m=>m.field).filter((f,i,a) => f && a.indexOf(f)!==i);
+
+  const box = $("mapBlock");
+  const problems = [];
+  if(missing.length)
+    problems.push(`${missing.length===1?"A required field has":"Required fields have"} no value: `+
+      missing.map(f => crmFields.find(x=>x.api_name===f)?.label || f).join(", "));
+  if(dupes.length)
+    problems.push(`Mapped twice: ${[...new Set(dupes)].join(", ")}`);
+
+  if(problems.length){
+    box.classList.remove("hide");
+    box.innerHTML = problems.join("<br>");
+  }else box.classList.add("hide");
+
+  const ok = !problems.length && mappings.length > 0;
+  $("startImport").disabled = !ok;
+  $("importHint").textContent = ok ? "" :
+    (missing.length ? "Map every required field to continue." : "");
+  return ok;
+}
+
+/* Build one CRM record from the mapping table. */
+function buildRecord(r){
+  const orig = dataRows[r.row-2] || [];
+  const rec = {};
+  for(const m of mappings){
+    if(!m.field) continue;
+    let v = "";
+    if(m.type === "column")        v = String(orig[m.index] ?? "").trim();
+    else if(m.type === "computed") v = COMPUTED[m.key] ? COMPUTED[m.key].get(r) : "";
+    else if(m.type === "static")   v = String(m.value ?? "").trim();
+    if(v !== "") rec[m.field] = v;
+  }
+  /* Last_Name is mandatory everywhere we import; a blank one fails the whole
+     row, so fall back rather than send a guaranteed rejection. */
+  if(crmMandatory.includes("Last_Name") && !rec.Last_Name) rec.Last_Name = splitName(r).last;
+  if(crmMandatory.includes("Account_Name") && !rec.Account_Name) rec.Account_Name = "Unknown";
+  return rec;
+}
+
+$("dest").addEventListener("change", e => loadFields(e.target.value));
+$("addMap").addEventListener("click", () => {
+  mappings.push({ field:"", type:"", key:null });
+  renderMapping();
+});
+
+async function apiGet(path){
+  const res = await fetch(path);
+  let json=null; try{ json = await res.json(); }catch{}
+  if(!res.ok || json?.error) throw new Error(json?.error || `${path} returned ${res.status}`);
+  return json;
+}
+
+loadModules();
+
 /* ========================= CRM import ==================================== */
 /* The browser holds the data and drives the loop; every CRM call goes through
    our own /api/* routes, which are the only place the Zoho credentials exist.
@@ -721,35 +999,6 @@ function downloadSlice(key, rows){
 const BATCH = 100;
 let importing = false, cancelled = false;
 let imported = [], failedRows = [];
-
-/* Step 2 ships an automatic mapping; step 3 replaces this with a mapping UI.
-   Kept deliberately small so it is obvious what is guessed and what is not. */
-function autoMap(r, dest){
-  const orig = dataRows[r.row-2] || [];
-  const pick = pats => {
-    const i = headers.findIndex(h => pats.test(String(h).trim()));
-    return i >= 0 ? String(orig[i] ?? "").trim() : "";
-  };
-  const first = pick(/^first|given/i);
-  const last  = pick(/^last|surname|family/i);
-  const full  = pick(/^(full )?name$|^contact/i);
-  const company = pick(/company|organi[sz]ation|account/i);
-
-  let First_Name = first, Last_Name = last;
-  if(!Last_Name){
-    if(full){ const bits = full.split(/\s+/); First_Name = First_Name || bits.slice(0,-1).join(" "); Last_Name = bits.slice(-1)[0]; }
-    else if(r.email.ok) Last_Name = r.email.value.split("@")[0];
-    else Last_Name = "Unknown";
-  }
-
-  const rec = { Last_Name };
-  if(First_Name) rec.First_Name = First_Name;
-  if(r.email.ok) rec.Email = r.email.value;
-  if(r.phone.ok && r.phone.kind === "mobile") rec.Mobile = r.phone.value;
-  if(r.phone.ok && r.phone.kind === "landline") rec.Phone = r.phone.value;
-  if(company) rec[dest === "Leads" ? "Company" : "Account_Name"] = company;
-  return rec;
-}
 
 function logLine(text, cls){
   const box = $("impLog"); box.classList.remove("hide");
@@ -767,6 +1016,7 @@ async function startImport(){
   const rows = results.filter(r => r.bucket !== "neither");
   if(!rows.length){ $("importHint").textContent = "Nothing to import — load a file first."; return; }
 
+  if(!validateMapping()){ $("importHint").textContent = "Finish the field mapping first."; return; }
   const dest = $("dest").value;
   const tag  = $("tag").value.trim();
 
@@ -787,7 +1037,7 @@ async function startImport(){
       else                  logLine(`Tag "${tag}" already existed — reusing it`);
     }
 
-    const records = rows.map(r => autoMap(r, dest));
+    const records = rows.map(buildRecord);
 
     for(let i=0; i<records.length; i+=BATCH){
       if(cancelled){ logLine("Stopped by user.", "err"); break; }
